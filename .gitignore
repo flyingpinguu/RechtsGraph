@@ -1,0 +1,24 @@
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments
+.env
+.env.*
+.venv/
+venv/
+env/
+pdf-neo4j-pipeline/.venv/
+
+# Generated pipeline outputs
+pdf-neo4j-pipeline/output/
+
+# Local editor/OS noise
+.idea/
+.vscode/

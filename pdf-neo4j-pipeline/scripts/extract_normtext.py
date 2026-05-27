@@ -1,0 +1,1566 @@
+#!/usr/bin/env python3
+"""Extract structured text from German legal PDFs.
+
+Usage:
+    .venv/bin/python scripts/extract_normtext.py \\
+        --output output/pilot/normtext_pilot.json \\
+        ../abfall_pdfs/01_KrWG.pdf ../abfall_pdfs/02_AVV.pdf \\
+        ../gefahrgut_pdfs/GGBefG.pdf
+
+Uses pypdf as the primary backend. If PyMuPDF is installed, it is used as a
+secondary extraction backend for fallback and comparison.
+"""
+
+import argparse
+import hashlib
+import io
+import json
+import os
+import re
+import sys
+from typing import Any, Dict, List, Optional
+
+from pypdf import PdfReader
+
+try:
+    import fitz  # PyMuPDF
+except ImportError:  # pragma: no cover - optional local dependency
+    fitz = None
+
+
+# ---------------------------------------------------------------------------
+# Regex patterns
+# ---------------------------------------------------------------------------
+PARA_RE = re.compile(r"^(\u00a7\s*\d+[a-z]?)(?:\s+(.+))?$")
+ANNEX_RE = re.compile(r"^(Anlage\s+\d+[a-z]?)(?:\s+(.+))?$")
+SUBSECTION_RE = re.compile(r"\((\d+)\)\s")
+LIST_ITEM_RE = re.compile(r"^\s*((?:\d+[a-z]?|[a-z])[\.)])\s+(.+)$")
+AVV_WASTE_RE = re.compile(r"^(\d{2}\s\d{2}(?:\s\d{2})?\*?)\s+(.+)$")
+PAGE_HEADER_RE = re.compile(
+    r"^(?:Ein Service des Bundesministeriums der Justiz sowie des Bundesamts für|"
+    r"Justiz\s+.+www\.gesetze-im-internet\.de|"
+    r"-\s*Seite\s+\d+\s+von\s+\d+\s*-)$"
+)
+SPLIT_TABLE_SECTIONS_AS_UNITS = False
+TABLE_ROWS_PER_CHUNK = 40
+TABLE_NOTES_PER_CHUNK = 10
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def sha256_str(s):
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def make_id(*parts):
+    return hashlib.sha256("".join(parts).encode()).hexdigest()[:12]
+
+
+def slugify(value):
+    value = (value or "").lower()
+    replacements = {
+        "§": "para",
+        "ä": "ae",
+        "ö": "oe",
+        "ü": "ue",
+        "ß": "ss",
+    }
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+    value = re.sub(r"[^a-z0-9]+", "_", value)
+    return value.strip("_")
+
+
+def doc_key_from_metadata(source_pdf, canonical_citation, metadata):
+    abbreviation = (metadata or {}).get("abbreviation") or canonical_citation
+    key = slugify(abbreviation)
+    if key:
+        return key
+    return slugify(os.path.splitext(os.path.basename(source_pdf))[0])
+
+
+def paragraph_number(label):
+    return label.replace("\u00a7", "").strip()
+
+
+def unit_slug(doc_key, unit_type, number):
+    return "{}_{}_{}".format(doc_key, unit_type, slugify(str(number)))
+
+
+def chunk_slug(*parts):
+    return "_".join(
+        slugify(str(part))
+        for part in parts
+        if part is not None and str(part).strip()
+    )
+
+
+def legal_citation(citation_prefix, unit_type, label, title=None):
+    if unit_type == "paragraph":
+        return "{} {}".format(citation_prefix, label)
+    if unit_type == "annex":
+        return "{} {}".format(citation_prefix, label)
+    if unit_type == "table":
+        return "{} {}".format(citation_prefix, label)
+    return "{} {}".format(citation_prefix, label)
+
+
+def relative_path(path, base_dir):
+    try:
+        return os.path.relpath(path, base_dir)
+    except ValueError:
+        return path
+
+
+# ---------------------------------------------------------------------------
+# PDF reading
+# ---------------------------------------------------------------------------
+
+def read_pdf(path):
+    raw = open(path, "rb").read()
+    reader = PdfReader(io.BytesIO(raw))
+    return raw, reader
+
+
+def extract_fitz_page_texts(path):
+    if fitz is None:
+        return []
+    texts = []
+    with fitz.open(path) as doc:
+        for page in doc:
+            texts.append((page.get_text("text") or "").replace("\x00", ""))
+    return texts
+
+
+def normalize_for_compare(text):
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def choose_page_text(pypdf_text, fitz_text):
+    """Choose the richer text backend while preserving deterministic behavior."""
+    if not fitz_text:
+        return pypdf_text, "pypdf"
+    if not pypdf_text:
+        return fitz_text, "pymupdf"
+    pypdf_norm = normalize_for_compare(pypdf_text)
+    fitz_norm = normalize_for_compare(fitz_text)
+    if len(fitz_norm) > len(pypdf_norm) * 1.05:
+        return fitz_text, "pymupdf"
+    return pypdf_text, "pypdf"
+
+
+def collect_after_label(lines, label, stop_labels):
+    collected = []
+    in_block = False
+    for line in lines:
+        stripped = line.strip()
+        if not in_block:
+            if stripped == label:
+                in_block = True
+            elif stripped.startswith(label):
+                value = stripped[len(label):].strip()
+                if value:
+                    collected.append(value)
+                in_block = True
+            continue
+        if any(stripped.startswith(stop) for stop in stop_labels):
+            break
+        if stripped:
+            collected.append(stripped)
+    return " ".join(collected).strip()
+
+
+def extract_meta(reader, path):
+    info = reader.metadata or {}
+    title = info.get("/Title", "")
+    first_text = reader.pages[0].extract_text() or ""
+    first_lines = [line.strip() for line in first_text.splitlines()]
+
+    for idx, line in enumerate(first_lines):
+        if line.startswith("(") and " - " in line and line.endswith(")") and idx > 0:
+            title = first_lines[idx - 1]
+            break
+    if not title:
+        title = os.path.basename(path)
+
+    date_enacted = None
+    date_match = re.search(r"Ausfertigungsdatum:\s*(\d{2}\.\d{2}\.\d{4})", first_text)
+    if date_match:
+        date_enacted = date_match.group(1)
+
+    full_citation = collect_after_label(
+        first_lines,
+        "Vollzitat:",
+        ["Stand:", "Fußnote", "§ "],
+    )
+    if not full_citation:
+        full_citation = title
+
+    canonical_citation = title
+    abbrev_match = re.search(r"\(([^()]+?)\s+-\s+([A-Za-z0-9]+)\)", first_text)
+    metadata = {}
+    if abbrev_match:
+        metadata["short_title"] = abbrev_match.group(1).strip()
+        metadata["abbreviation"] = abbrev_match.group(2).strip()
+        canonical_citation = metadata["abbreviation"]
+
+    status_note = collect_after_label(first_lines, "Stand:", ["Fußnote", "§ "])
+    if status_note:
+        metadata["status_note"] = status_note
+
+    return title, date_enacted, full_citation, canonical_citation, metadata
+
+
+# ---------------------------------------------------------------------------
+# Paragraph detection
+# ---------------------------------------------------------------------------
+
+def normalize_page_lines(page_text):
+    """Return legal-text lines with recurring gesetze-im-internet headers removed."""
+    normalized = []
+    for line in page_text.splitlines():
+        clean = line.replace("\x00", "").strip()
+        if PAGE_HEADER_RE.match(clean):
+            continue
+        normalized.append(line)
+    return normalized
+
+
+def is_top_level_structure_heading(stripped):
+    return PARA_RE.match(stripped) or ANNEX_RE.match(stripped)
+
+
+def detect_paras_across_pages(page_text_map):
+    """Return paragraph units spanning page boundaries.
+
+    Page-wise parsing loses text whenever a paragraph continues on the next PDF
+    page. Keeping a document-wide line stream makes the next paragraph heading,
+    not the page break, the unit boundary.
+    """
+    results = []
+    current = None
+
+    for page_idx in sorted(page_text_map):
+        for line in normalize_page_lines(page_text_map[page_idx]):
+            stripped = line.strip()
+            m = PARA_RE.match(stripped)
+            if m:
+                if current is not None:
+                    current["text"] = "\n".join(current["lines"]).strip()
+                    results.append(current)
+                current = {
+                    "start_page": page_idx,
+                    "end_page": page_idx,
+                    "label": m.group(1).strip(),
+                    "title": (m.group(2) or "").strip() or None,
+                    "lines": [line],
+                }
+                continue
+
+            if ANNEX_RE.match(stripped):
+                if current is not None:
+                    current["text"] = "\n".join(current["lines"]).strip()
+                    results.append(current)
+                    current = None
+                continue
+
+            if current is not None:
+                current["lines"].append(line)
+                current["end_page"] = page_idx
+
+    if current is not None:
+        current["text"] = "\n".join(current["lines"]).strip()
+        results.append(current)
+
+    return results
+
+
+def detect_annexes_across_pages(page_text_map):
+    """Return Anlage blocks as structural units."""
+    results = []
+    current = None
+
+    for page_idx in sorted(page_text_map):
+        for line in normalize_page_lines(page_text_map[page_idx]):
+            stripped = line.strip()
+            m = ANNEX_RE.match(stripped)
+            if m:
+                if current is not None:
+                    current["text"] = "\n".join(current["lines"]).strip()
+                    results.append(current)
+                current = {
+                    "start_page": page_idx,
+                    "end_page": page_idx,
+                    "label": m.group(1).strip(),
+                    "title": (m.group(2) or "").strip() or None,
+                    "lines": [line],
+                    "line_pages": [page_idx],
+                }
+                continue
+
+            if current is not None:
+                current["lines"].append(line)
+                current["line_pages"].append(page_idx)
+                current["end_page"] = page_idx
+
+    if current is not None:
+        current["text"] = "\n".join(current["lines"]).strip()
+        results.append(current)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Subsection chunking
+# ---------------------------------------------------------------------------
+
+def split_into_subsections(para_text):
+    """Split paragraph text into subsections by '(n)' markers."""
+    subsections = []
+    lines = para_text.splitlines()
+    current_idx = None
+    current_lines = []
+    preamble_lines = []
+
+    for line in lines:
+        m = SUBSECTION_RE.search(line)
+        if m:
+            if current_lines:
+                subsections.append((current_idx, "\n".join(current_lines).strip()))
+                current_lines = []
+            current_idx = int(m.group(1))
+            if preamble_lines:
+                current_lines.extend(preamble_lines)
+                preamble_lines = []
+            current_lines.append(line)
+        else:
+            if current_idx is None:
+                preamble_lines.append(line)
+            else:
+                current_lines.append(line)
+
+    if current_lines:
+        idx_label = current_idx if current_idx is not None else 0
+        subsections.append((idx_label, "\n".join(current_lines).strip()))
+
+    if not subsections:
+        subsections.append((0, para_text.strip()))
+    return subsections
+
+
+def make_subsection_citation(unit_citation, sub_num):
+    if sub_num:
+        return "{} Abs. {}".format(unit_citation, sub_num)
+    return unit_citation
+
+
+def split_into_list_items(text):
+    """Split numbered/lettered legal list items inside a parent chunk.
+
+    This deliberately keeps the parent chunk intact. The returned list items are
+    child chunks that make enumerations addressable without losing the full
+    Absatz context.
+    """
+    items = []
+    current = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        match = LIST_ITEM_RE.match(stripped)
+        if match:
+            if current is not None:
+                current["text"] = "\n".join(current["lines"]).strip()
+                items.append(current)
+            marker = match.group(1)
+            marker_clean = marker.rstrip(".)")
+            item_type = "letter_item" if marker[0].isalpha() else "numbered_item"
+            current = {
+                "marker": marker_clean,
+                "raw_marker": marker,
+                "list_item_type": item_type,
+                "lines": [stripped],
+            }
+            continue
+        if current is not None:
+            current["lines"].append(line)
+    if current is not None:
+        current["text"] = "\n".join(current["lines"]).strip()
+        items.append(current)
+    return items
+
+
+def list_item_citation(parent_citation, item):
+    marker = item["marker"]
+    if item["list_item_type"] == "letter_item":
+        return "{} Buchst. {}".format(parent_citation, marker)
+    return "{} Nr. {}".format(parent_citation, marker)
+
+
+def finalize_annex_chunk(chunk):
+    chunk["text"] = "\n".join(chunk["lines"]).strip()
+    pages = chunk.get("line_pages") or []
+    if pages:
+        chunk["page_range"] = {"start": min(pages) + 1, "end": max(pages) + 1}
+    return chunk
+
+
+def page_range_from_page(page_number):
+    if page_number is None:
+        return None
+    return {"start": page_number, "end": page_number}
+
+
+def merge_page_ranges(page_ranges):
+    ranges = [page_range for page_range in page_ranges if page_range]
+    if not ranges:
+        return None
+    return {
+        "start": min(page_range["start"] for page_range in ranges),
+        "end": max(page_range["end"] for page_range in ranges),
+    }
+
+
+def split_annex_into_chunks(annex):
+    """Split Anlage text into coarse chunks at table and decimal headings."""
+    if isinstance(annex, dict):
+        annex_lines = annex.get("lines", [])
+        annex_line_pages = annex.get("line_pages", [annex.get("start_page", 0)] * len(annex_lines))
+    else:
+        annex_lines = str(annex).splitlines()
+        annex_line_pages = [0] * len(annex_lines)
+
+    chunks = []
+    current = None
+    heading_re = re.compile(r"^(Tabelle\s+\d+[a-z]?|(?:\d+(?:\.\d+)+)\s+.+|Anhang\s+\d+.*)$")
+    for line, page_idx in zip(annex_lines, annex_line_pages):
+        stripped = line.strip()
+        match = heading_re.match(stripped)
+        if match:
+            if current is not None:
+                chunks.append(finalize_annex_chunk(current))
+            label = match.group(1)
+            if label.startswith("Tabelle"):
+                chunk_type = "table_block"
+            elif label.startswith("Anhang"):
+                chunk_type = "appendix_block"
+            else:
+                chunk_type = "annex_section"
+            current = {
+                "label": label,
+                "chunk_type": chunk_type,
+                "lines": [line],
+                "line_pages": [page_idx],
+            }
+            continue
+        if current is None:
+            current = {
+                "label": None,
+                "chunk_type": "annex_text",
+                "lines": [line],
+                "line_pages": [page_idx],
+            }
+        else:
+            current["lines"].append(line)
+            current["line_pages"].append(page_idx)
+    if current is not None:
+        chunks.append(finalize_annex_chunk(current))
+    return [chunk for chunk in chunks if chunk.get("text")]
+
+
+def infer_table_columns(header_text):
+    header = normalize_for_compare(header_text)
+    if not header:
+        return []
+    if " Konzentration " in header:
+        before, after = header.split(" Konzentration ", 1)
+        if before.strip() in ("Anorganische Stoffe", "Organische Stoffe"):
+            before = "Stoff/Parameter"
+        return [before.strip(), "Konzentration {}".format(after).strip()]
+    if header.startswith("Untersuchungsparameter "):
+        return ["Untersuchungsparameter", "Verfahrenshinweise", "Norm", "Ausgabe der Norm"]
+    parts = [part.strip() for part in re.split(r"\s{2,}", header) if part.strip()]
+    return parts or [header]
+
+
+def concentration_section_label(header_text):
+    header = normalize_for_compare(header_text)
+    if " Konzentration " not in header:
+        return None
+    before = header.split(" Konzentration ", 1)[0].strip()
+    if before in ("Anorganische Stoffe", "Organische Stoffe"):
+        return before
+    return None
+
+
+def is_table_section_header(line):
+    normalized = normalize_for_compare(line)
+    if " Konzentration " not in normalized:
+        return False
+    if re.search(r"\d+(?:[,.]\d+)?", normalized):
+        return False
+    return concentration_section_label(normalized) is not None
+
+
+def is_table_note_start(line):
+    normalized = normalize_for_compare(line)
+    return (
+        normalized == "-----"
+        or re.match(r"^\d+\)\s", normalized)
+        or normalized.startswith("Für Salzbelastung")
+        or normalized.startswith("Der pH-Wert")
+        or normalized.startswith("nicht überschreiten")
+        or normalized.startswith("ISO-Normen")
+    )
+
+
+def is_method_table_header(header_text):
+    return normalize_for_compare(header_text).startswith("Untersuchungsparameter ")
+
+
+def method_row_starts():
+    return (
+        "pH-Wert",
+        "Trockenrückstand",
+        "Cyanid, gesamt",
+        "Cyanid, leicht freisetzbar",
+        "Arsen",
+        "Blei",
+        "Cadmium",
+        "Chrom",
+        "Chrom, gesamt",
+        "Chromat",
+        "Kupfer",
+        "Nickel",
+        "Zink",
+        "Quecksilber",
+        "Mineralölkohlenwasserstoffe",
+        "Leichtflüchtige",
+        "Benzol und Derivate",
+        "BTEX",
+        "Polycyclische aromatische",
+        "PAK, gesamt",
+        "Naphthalin",
+        "Polychlorierte Biphenyle",
+        "PCB, gesamt",
+        "TOC",
+        "Glühverlust",
+        "Elektrische Leitfähigkeit",
+        "Gesamttrockenrückstand",
+        "für alle Elemente",
+    )
+
+
+def is_method_row_start(line):
+    normalized = normalize_for_compare(line)
+    for start in method_row_starts():
+        if re.match(r"^{}(?:$|[\s:])".format(re.escape(start)), normalized):
+            return True
+    return False
+
+
+def split_embedded_method_rows(line):
+    """Split PDF extraction joins such as '... 1981Cyanid, leicht ...'."""
+    parts = [line]
+    for marker in method_row_starts():
+        next_parts = []
+        for part in parts:
+            idx = part.find(marker)
+            if idx > 0 and re.search(r"\d{4}$", part[:idx].strip()):
+                next_parts.append(part[:idx].strip())
+                next_parts.append(part[idx:].strip())
+            else:
+                next_parts.append(part)
+        parts = next_parts
+    return parts
+
+
+def method_row_has_method(row_lines):
+    text = normalize_for_compare(" ".join(row_lines))
+    method_markers = (
+        "DIN ",
+        "DIN-",
+        "ISO",
+        "Merkblatt",
+        "Gaschromatographie",
+        "AAS",
+        "ICP",
+        "HPLC",
+        "GC-",
+        "GC/",
+        "Elementaranalyse",
+        "Wasserbeschaffenheit",
+        "Bodenbeschaffenheit",
+        "Deutsche Einheitsverfahren",
+    )
+    return any(marker in text for marker in method_markers)
+
+
+def parse_method_table_rows(raw_row_items, header_text):
+    rows = []
+    row_page_ranges = []
+    notes = []
+    note_page_ranges = []
+    current = []
+    current_pages = []
+    in_notes = False
+    normalized_header = normalize_for_compare(header_text)
+
+    split_lines = []
+    for line, page_number in raw_row_items:
+        for split_line in split_embedded_method_rows(line):
+            split_lines.append((split_line, page_number))
+
+    for line, page_number in split_lines:
+        normalized = normalize_for_compare(line)
+        if not normalized:
+            continue
+        if normalized == normalized_header:
+            continue
+        if is_table_note_start(line):
+            in_notes = True
+        if in_notes:
+            if current:
+                rows.append(" ".join(current).strip())
+                row_page_ranges.append(merge_page_ranges(current_pages))
+                current = []
+                current_pages = []
+            notes.append(line)
+            note_page_ranges.append(page_range_from_page(page_number))
+            continue
+        if is_method_row_start(line) and current and method_row_has_method(current):
+            rows.append(" ".join(current).strip())
+            row_page_ranges.append(merge_page_ranges(current_pages))
+            current = [line]
+            current_pages = [page_range_from_page(page_number)]
+            continue
+        if current:
+            current.append(line)
+            current_pages.append(page_range_from_page(page_number))
+        else:
+            current = [line]
+            current_pages = [page_range_from_page(page_number)]
+
+    if current:
+        rows.append(" ".join(current).strip())
+        row_page_ranges.append(merge_page_ranges(current_pages))
+    return rows, row_page_ranges, notes, note_page_ranges
+def split_row_into_cells(row_str, num_columns):
+    # Try splitting by 2 or more spaces first
+    cells = [c.strip() for c in re.split(r"\s{2,}", row_str) if c.strip()]
+    if len(cells) == num_columns:
+        return cells
+    if len(cells) > num_columns:
+        return [" ".join(cells[:-num_columns+1])] + cells[-num_columns+1:]
+        
+    # If 2 columns, fallback to splitting off the last token if it looks like a number/value
+    if num_columns == 2:
+        m = re.match(r"^(.*?)\s+([<>]?=?\s*\d.*)$", row_str)
+        if m:
+            return [m.group(1).strip(), m.group(2).strip()]
+            
+    return [row_str]
+
+
+def parse_table_block(table_text, line_pages=None):
+    """Parse a coarse table block into header metadata and row strings.
+
+    PDF text extraction does not preserve grid geometry reliably. This parser
+    keeps rows as conservative line strings but makes the inferred column header
+    explicit in every row chunk.
+    """
+    raw_lines = table_text.splitlines()
+    if line_pages is None or len(line_pages) != len(raw_lines):
+        line_pages = [None] * len(raw_lines)
+    line_items = [
+        (line.strip(), page_idx + 1 if page_idx is not None else None)
+        for line, page_idx in zip(raw_lines, line_pages)
+        if line.strip()
+    ]
+    lines = [line for line, _page_number in line_items]
+    if not lines:
+        return {
+            "label": None,
+            "title": None,
+            "columns": [],
+            "column_header_text": "",
+            "rows": [],
+            "row_page_ranges": [],
+            "notes": [],
+            "note_page_ranges": [],
+            "sections": [],
+        }
+
+    label = lines[0]
+    title_lines = []
+    header_index = None
+    header_keywords = ("Konzentration", "Verfahrenshinweise", "Parameter", "Norm", "Ausgabe")
+    for idx, line in enumerate(lines[1:], start=1):
+        if any(keyword in line for keyword in header_keywords):
+            header_index = idx
+            break
+        title_lines.append(line)
+
+    if header_index is None:
+        header_index = 1 if len(lines) > 1 else 0
+        title_lines = []
+
+    header_text = lines[header_index] if header_index < len(lines) else ""
+    raw_row_items = line_items[header_index + 1 :]
+    if is_method_table_header(header_text):
+        row_lines, row_page_ranges, note_lines, note_page_ranges = parse_method_table_rows(
+            raw_row_items,
+            header_text,
+        )
+        columns = infer_table_columns(header_text)
+        num_columns = len(columns)
+        parsed_rows = [split_row_into_cells(r, num_columns) for r in row_lines]
+        section = {
+            "section_label": None,
+            "columns": columns,
+            "column_header_text": header_text,
+            "rows": parsed_rows,
+            "row_page_ranges": row_page_ranges,
+            "notes": note_lines,
+            "note_page_ranges": note_page_ranges,
+        }
+        return {
+            "label": label,
+            "title": " ".join(title_lines).strip() or None,
+            "columns": infer_table_columns(header_text),
+            "column_header_text": header_text,
+            "rows": row_lines,
+            "row_page_ranges": row_page_ranges,
+            "notes": note_lines,
+            "note_page_ranges": note_page_ranges,
+            "sections": [section],
+        }
+
+    sections = [
+        {
+            "section_label": concentration_section_label(header_text),
+            "columns": infer_table_columns(header_text),
+            "column_header_text": header_text,
+            "rows": [],
+            "row_page_ranges": [],
+            "notes": [],
+            "note_page_ranges": [],
+        }
+    ]
+    current_section = sections[0]
+    in_notes = False
+    for line, page_number in raw_row_items:
+        normalized = normalize_for_compare(line)
+        if normalized == normalize_for_compare(current_section["column_header_text"]):
+            continue
+        if is_table_section_header(normalized):
+            current_section = {
+                "section_label": concentration_section_label(normalized),
+                "columns": infer_table_columns(normalized),
+                "column_header_text": normalized,
+                "rows": [],
+                "row_page_ranges": [],
+                "notes": [],
+                "note_page_ranges": [],
+            }
+            sections.append(current_section)
+            in_notes = False
+            continue
+        if is_table_note_start(line):
+            in_notes = True
+        if in_notes:
+            current_section["notes"].append(line)
+            current_section["note_page_ranges"].append(page_range_from_page(page_number))
+            continue
+        if " Konzentration " in normalized and not re.search(r"\d+(?:[,.]\d+)?", normalized):
+            continue
+        current_section["rows"].append(line)
+        current_section["row_page_ranges"].append(page_range_from_page(page_number))
+
+    row_lines = []
+    row_page_ranges = []
+    note_lines = []
+    note_page_ranges = []
+    for section in sections:
+        num_columns = len(section.get("columns", []))
+        parsed_rows = [split_row_into_cells(r, num_columns) for r in section["rows"]]
+        section["rows"] = parsed_rows
+        row_lines.extend(section["rows"])
+        row_page_ranges.extend(section["row_page_ranges"])
+        note_lines.extend(section["notes"])
+        note_page_ranges.extend(section["note_page_ranges"])
+    return {
+        "label": label,
+        "title": " ".join(title_lines).strip() or None,
+        "columns": infer_table_columns(header_text),
+        "column_header_text": header_text,
+        "rows": row_lines,
+        "row_page_ranges": row_page_ranges,
+        "notes": note_lines,
+        "note_page_ranges": note_page_ranges,
+        "sections": sections,
+    }
+
+
+def chunk_rows(rows, size):
+    for start in range(0, len(rows), size):
+        end = min(start + size, len(rows))
+        yield start + 1, end, rows[start:end]
+
+
+def add_table_from_block(
+    structural_units,
+    chunks,
+    doc_id,
+    doc_key,
+    annex_label,
+    annex_unit_id,
+    annex_unit_obj,
+    parent_citation,
+    unit_global_key,
+    pages,
+    block,
+    confidence=0.70,
+):
+    table_text = "\n".join(block.get("lines", [])) if block.get("lines") else block["text"]
+    table = parse_table_block(table_text, block.get("line_pages"))
+    page_range = block.get("page_range") or annex_unit_obj["page_range"]
+    table_label = table["label"] or block["label"] or "Tabelle"
+    table_global_key = chunk_slug(unit_global_key, table_label)
+    table_citation = "{} {}".format(parent_citation, table_label)
+    sections = table.get("sections") or [
+        {
+            "section_label": None,
+            "columns": table["columns"],
+            "column_header_text": table["column_header_text"],
+            "rows": table["rows"],
+            "row_page_ranges": table.get("row_page_ranges", []),
+            "notes": table["notes"],
+            "note_page_ranges": table.get("note_page_ranges", []),
+        }
+    ]
+    labeled_sections = [section for section in sections if section.get("section_label")]
+    if SPLIT_TABLE_SECTIONS_AS_UNITS and len(labeled_sections) > 1:
+        unit_specs = []
+        for section in sections:
+            section_label = section.get("section_label")
+            section_table_label = "{} {}".format(table_label, section_label) if section_label else table_label
+            section_global_key = chunk_slug(table_global_key, section_label)
+            section_citation = "{} {}".format(table_citation, section_label) if section_label else table_citation
+            unit_specs.append(
+                {
+                    "label": section_table_label,
+                    "global_key": section_global_key,
+                    "citation": section_citation,
+                    "sections": [section],
+                    "columns": section["columns"],
+                    "column_header_text": section["column_header_text"],
+                    "table_sections": [section_label] if section_label else [],
+                }
+            )
+    else:
+        unit_specs = [
+            {
+                "label": table_label,
+                "global_key": table_global_key,
+                "citation": table_citation,
+                "sections": sections,
+                "columns": table["columns"],
+                "column_header_text": table["column_header_text"],
+                "table_sections": [section.get("section_label") for section in sections if section.get("section_label")],
+            }
+        ]
+
+    for spec in unit_specs:
+        table_unit_id = "unit_{}".format(spec["global_key"])
+        if table_unit_id not in annex_unit_obj["child_unit_ids"]:
+            annex_unit_obj["child_unit_ids"].append(table_unit_id)
+
+        unit_page_range = merge_page_ranges(
+            [
+                page_range
+                for section in spec["sections"]
+                for page_range in (
+                    section.get("row_page_ranges", []) + section.get("note_page_ranges", [])
+                )
+            ]
+        ) or page_range
+        unit_row_count = sum(len(section.get("rows", [])) for section in spec["sections"])
+        unit_note_count = sum(len(section.get("notes", [])) for section in spec["sections"])
+
+        table_unit = {
+            "unit_id": table_unit_id,
+            "global_key": spec["global_key"],
+            "legal_citation": spec["citation"],
+            "display_name": "{}{}".format(
+                spec["citation"],
+                " {}".format(table["title"]) if table.get("title") else "",
+            ),
+            "document_id": doc_id,
+            "document_key": doc_key,
+            "unit_type": "table",
+            "label": spec["label"],
+            "number": slugify(spec["label"].replace("Tabelle", "").replace("Anhang", "")).replace("_", ""),
+            "title": table.get("title"),
+            "breadcrumbs": [doc_key, annex_label, spec["label"]],
+            "parent_unit_id": annex_unit_id,
+            "child_unit_ids": [],
+            "page_range": unit_page_range,
+            "columns": spec["columns"],
+            "column_header_text": spec["column_header_text"],
+            "row_count": unit_row_count,
+            "note_count": unit_note_count,
+            "table_sections": spec["table_sections"],
+            "confidence": confidence,
+            "review_status": "pending",
+            "is_uncertain": False,
+            "uncertainty_reason": None,
+        }
+        structural_units.append(table_unit)
+
+        multi_section_unit = len(spec["sections"]) > 1
+        for section_idx, section in enumerate(spec["sections"], start=1):
+            section_label = section.get("section_label")
+            section_slug = chunk_slug(section_label) if multi_section_unit and section_label else None
+            section_citation_part = " {}".format(section_label) if multi_section_unit and section_label else ""
+            row_page_ranges = section.get("row_page_ranges", [])
+            for row_start, row_end, row_lines in chunk_rows(section["rows"], TABLE_ROWS_PER_CHUNK):
+                chunk_page_range = merge_page_ranges(row_page_ranges[row_start - 1:row_end]) or unit_page_range
+                chunk_page_id = pages[chunk_page_range["start"] - 1]["page_id"]
+                chunk_global_key = chunk_slug(spec["global_key"], section_slug, "rows", row_start, row_end)
+                chunk_id = "chunk_{}".format(chunk_global_key)
+                chunk_citation = "{}{} Zeilen {}-{}".format(
+                    spec["citation"],
+                    section_citation_part,
+                    row_start,
+                    row_end,
+                )
+                header = section["column_header_text"]
+                columns = section["columns"]
+                chunk_text = "Spalten: {}\n{}".format(
+                    " | ".join(columns) if columns else header,
+                    "\n".join(" | ".join(cells) if isinstance(cells, list) else str(cells) for cells in row_lines),
+                ).strip()
+                chunks.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "global_key": chunk_global_key,
+                        "legal_citation": chunk_citation,
+                        "display_name": chunk_citation,
+                        "chunk_type": "table_rows",
+                        "unit_id": table_unit_id,
+                        "parent_chunk_id": None,
+                        "child_chunk_ids": [],
+                        "label": "{}rows_{}_{}".format(
+                            "{}_".format(section_slug) if section_slug else "",
+                            row_start,
+                            row_end,
+                        ),
+                        "number": None,
+                        "sequence": (section_idx * 1000) + row_start,
+                        "page_id": chunk_page_id,
+                        "page_range": chunk_page_range,
+                        "row_range": {"start": row_start, "end": row_end},
+                        "table_section": section_label,
+                        "columns": columns,
+                        "column_header_text": header,
+                        "rows": row_lines,
+                        "text": chunk_text,
+                        "text_sha256": sha256_str(chunk_text),
+                        "confidence": confidence,
+                        "review_status": "pending",
+                    }
+                )
+
+            note_page_ranges = section.get("note_page_ranges", [])
+            for note_start, note_end, note_lines in chunk_rows(section["notes"], TABLE_NOTES_PER_CHUNK):
+                chunk_page_range = merge_page_ranges(note_page_ranges[note_start - 1:note_end]) or unit_page_range
+                chunk_page_id = pages[chunk_page_range["start"] - 1]["page_id"]
+                chunk_global_key = chunk_slug(spec["global_key"], section_slug, "notes", note_start, note_end)
+                chunk_id = "chunk_{}".format(chunk_global_key)
+                chunk_citation = "{}{} Hinweise {}-{}".format(
+                    spec["citation"],
+                    section_citation_part,
+                    note_start,
+                    note_end,
+                )
+                chunk_text = "\n".join(note_lines).strip()
+                if not chunk_text:
+                    continue
+                chunks.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "global_key": chunk_global_key,
+                        "legal_citation": chunk_citation,
+                        "display_name": chunk_citation,
+                        "chunk_type": "table_note",
+                        "unit_id": table_unit_id,
+                        "parent_chunk_id": None,
+                        "child_chunk_ids": [],
+                        "label": "{}notes_{}_{}".format(
+                            "{}_".format(section_slug) if section_slug else "",
+                            note_start,
+                            note_end,
+                        ),
+                        "number": None,
+                        "sequence": (section_idx * 1000) + 500 + note_start,
+                        "page_id": chunk_page_id,
+                        "page_range": chunk_page_range,
+                        "table_section": section_label,
+                        "text": chunk_text,
+                        "text_sha256": sha256_str(chunk_text),
+                        "confidence": confidence,
+                        "review_status": "pending",
+                    }
+                )
+
+
+# ---------------------------------------------------------------------------
+# AVV waste code detection
+# ---------------------------------------------------------------------------
+
+def detect_waste_codes(page_text):
+    """Return list of (waste_code_line, full_text) for waste code lines."""
+    results = []
+    lines = page_text.splitlines()
+    for line in lines:
+        m = AVV_WASTE_RE.match(line.strip())
+        if m:
+            waste_code = m.group(1).strip()
+            waste_text = m.group(2).strip()
+            results.append((waste_code, waste_text, line.strip()))
+    return results
+
+
+def make_issue(
+    doc_id,
+    target_unit_id,
+    target_chunk_id,
+    issue_type,
+    severity,
+    description,
+    evidence,
+    corrected_value=None,
+    page_range=None,
+):
+    issue_id = "issue_{}".format(make_id(doc_id, issue_type, evidence, description))
+    issue = {
+        "issue_id": issue_id,
+        "document_id": doc_id,
+        "target_unit_id": target_unit_id,
+        "target_chunk_id": target_chunk_id,
+        "issue_type": issue_type,
+        "severity": severity,
+        "description": description,
+        "evidence": evidence,
+        "corrected_value": corrected_value,
+        "review_status": "open",
+    }
+    if page_range is not None:
+        issue["page_range"] = page_range
+    return issue
+
+
+def detect_source_text_anomalies(doc_id, pages):
+    """Flag likely source/PDF text defects without silently rewriting the law."""
+    issues = []
+    seen = set()
+    patterns = [
+        (
+            re.compile(r"Das Bundesministerium .+ die Zahl der .+ und$"),
+            "possible_missing_verb_in_source_text",
+            "Line looks grammatically incomplete in the extracted source text. "
+            "Do not auto-correct norm text; verify against another authoritative source.",
+        ),
+    ]
+    for page in pages:
+        for raw_line in page.get("text", "").splitlines():
+            line = normalize_for_compare(raw_line)
+            for regex, issue_type, description in patterns:
+                if regex.search(line):
+                    key = (page.get("page_number"), issue_type, line)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    issues.append(
+                        make_issue(
+                            doc_id,
+                            None,
+                            None,
+                            issue_type,
+                            "warning",
+                            "{} Page {}.".format(description, page.get("page_number")),
+                            line,
+                            None,
+                            {"start": page.get("page_number"), "end": page.get("page_number")},
+                        )
+                    )
+    return issues
+
+
+def write_page_files(pages, doc_key, output_base_dir, pages_root_dir):
+    if output_base_dir is None:
+        output_base_dir = os.getcwd()
+    if pages_root_dir is None:
+        pages_root_dir = os.path.join(output_base_dir, "pages")
+    doc_pages_dir = os.path.join(pages_root_dir, doc_key)
+    os.makedirs(doc_pages_dir, exist_ok=True)
+
+    page_refs = []
+    for page in pages:
+        page_number = int(page["page_number"])
+        filename = "page_{:03d}.json".format(page_number)
+        page_path = os.path.join(doc_pages_dir, filename)
+        with open(page_path, "w", encoding="utf-8") as f:
+            json.dump(page, f, indent=2, ensure_ascii=False)
+        page_refs.append(
+            {
+                "page_id": page["page_id"],
+                "page_number": page_number,
+                "pdf_page_index": page["pdf_page_index"],
+                "path": relative_path(page_path, output_base_dir),
+                "text_sha256": page["text_sha256"],
+                "text_extraction_backend": page.get("text_extraction_backend"),
+            }
+        )
+    return page_refs
+
+
+# ---------------------------------------------------------------------------
+# Document extraction
+# ---------------------------------------------------------------------------
+
+def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
+    raw, reader = read_pdf(pdf_path)
+    doc_sha = sha256_bytes(raw)
+    title, date_enacted, full_citation, canonical_citation, doc_metadata = extract_meta(reader, pdf_path)
+    fitz_page_texts = extract_fitz_page_texts(pdf_path)
+
+    pages = []
+    all_waste_codes = []
+    page_text_map = {}
+    backend_counts = {"pypdf": 0, "pymupdf": 0}
+    backend_comparison = []
+
+    for idx, page in enumerate(reader.pages):
+        pypdf_text = (page.extract_text() or "").replace("\x00", "")
+        fitz_text = fitz_page_texts[idx] if idx < len(fitz_page_texts) else ""
+        text, backend = choose_page_text(pypdf_text, fitz_text)
+        backend_counts[backend] = backend_counts.get(backend, 0) + 1
+        if fitz_text:
+            pypdf_norm = normalize_for_compare(pypdf_text)
+            fitz_norm = normalize_for_compare(fitz_text)
+            if pypdf_norm != fitz_norm:
+                backend_comparison.append(
+                    {
+                        "page_number": idx + 1,
+                        "pypdf_chars": len(pypdf_norm),
+                        "pymupdf_chars": len(fitz_norm),
+                        "selected_backend": backend,
+                    }
+                )
+        text_sha = sha256_str(text)
+        page_id = "pg_{}_{}".format(make_id(pdf_path, str(idx)), str(idx).zfill(3))
+        page_obj = {
+            "page_id": page_id,
+            "page_number": idx + 1,
+            "pdf_page_index": idx,
+            "text": text,
+            "text_sha256": text_sha,
+            "text_extraction_backend": backend,
+        }
+        if fitz_text:
+            page_obj["backend_text_sha256"] = {
+                "pypdf": sha256_str(pypdf_text),
+                "pymupdf": sha256_str(fitz_text),
+            }
+        pages.append(page_obj)
+        page_text_map[idx] = text
+
+        wcodes = detect_waste_codes(text)
+        for wc, wt, full_line in wcodes:
+            all_waste_codes.append((idx, wc, wt, full_line))
+
+    all_paras = detect_paras_across_pages(page_text_map)
+    all_annexes = detect_annexes_across_pages(page_text_map)
+
+    doc_id = "doc_{}".format(make_id(pdf_path))
+    source_pdf = os.path.basename(pdf_path)
+    doc_key = doc_key_from_metadata(source_pdf, canonical_citation, doc_metadata)
+    citation_prefix = doc_metadata.get("abbreviation") or canonical_citation or doc_key
+    page_refs = write_page_files(pages, doc_key, output_base_dir, pages_root_dir)
+    structural_units = []
+    chunks = []
+    issues = []
+    issues.extend(detect_source_text_anomalies(doc_id, pages))
+
+    # Process paragraph units
+    for para_idx, para in enumerate(all_paras):
+        page_num = para["start_page"]
+        end_page_num = para["end_page"]
+        label = para["label"]
+        title_text = para.get("title")
+        number = paragraph_number(label)
+        para_text = para["text"]
+        unit_global_key = unit_slug(doc_key, "para", number)
+        unit_id = "unit_{}".format(unit_global_key)
+        unit_citation = legal_citation(citation_prefix, "paragraph", label, title_text)
+        page_id = pages[page_num]["page_id"]
+
+        subsections = split_into_subsections(para_text)
+        subsection_count = len(subsections)
+
+        unit_obj = {
+            "unit_id": unit_id,
+            "global_key": unit_global_key,
+            "legal_citation": unit_citation,
+            "display_name": "{}{}".format(unit_citation, " {}".format(title_text) if title_text else ""),
+            "document_id": doc_id,
+            "document_key": doc_key,
+            "unit_type": "paragraph",
+            "label": label,
+            "number": number,
+            "title": title_text,
+            "breadcrumbs": [doc_key, label],
+            "parent_unit_id": None,
+            "child_unit_ids": [],
+            "page_range": {"start": page_num + 1, "end": end_page_num + 1},
+            "text": para_text,
+            "text_sha256": sha256_str(para_text),
+            "confidence": 0.95,
+            "review_status": "pending",
+            "is_uncertain": False,
+            "uncertainty_reason": None,
+        }
+        structural_units.append(unit_obj)
+
+        for sub_idx, (sub_num, sub_text) in enumerate(subsections):
+            if sub_num:
+                chunk_type = "subsection"
+                chunk_global_key = chunk_slug(unit_global_key, "abs", sub_num)
+                chunk_label = "Abs. {}".format(sub_num)
+            else:
+                chunk_type = "paragraph_text"
+                chunk_global_key = chunk_slug(unit_global_key, "text")
+                chunk_label = label
+            chunk_id = "chunk_{}".format(chunk_global_key)
+            chunk_citation = make_subsection_citation(unit_citation, sub_num)
+            chunk_obj = {
+                "chunk_id": chunk_id,
+                "global_key": chunk_global_key,
+                "legal_citation": chunk_citation,
+                "display_name": chunk_citation,
+                "chunk_type": chunk_type,
+                "unit_id": unit_id,
+                "parent_chunk_id": None,
+                "child_chunk_ids": [],
+                "label": chunk_label,
+                "number": sub_num,
+                "sequence": sub_idx + 1,
+                "page_id": page_id,
+                "page_range": {"start": page_num + 1, "end": end_page_num + 1},
+                "text": sub_text,
+                "text_sha256": sha256_str(sub_text),
+                "evidence_text": para_text,
+                "confidence": 0.9 if subsection_count > 1 else 1.0,
+                "review_status": "pending",
+            }
+            chunks.append(chunk_obj)
+
+    # Process Anlage units
+    for annex_idx, annex in enumerate(all_annexes):
+        page_num = annex["start_page"]
+        end_page_num = annex["end_page"]
+        label = annex["label"]
+        title_text = annex.get("title")
+        number = label.replace("Anlage", "").strip()
+        annex_text = annex["text"]
+        unit_global_key = unit_slug(doc_key, "anlage", number)
+        unit_id = "unit_{}".format(unit_global_key)
+        unit_citation = legal_citation(citation_prefix, "annex", label, title_text)
+        page_id = pages[page_num]["page_id"]
+
+        unit_obj = {
+            "unit_id": unit_id,
+            "global_key": unit_global_key,
+            "legal_citation": unit_citation,
+            "display_name": "{}{}".format(unit_citation, " {}".format(title_text) if title_text else ""),
+            "document_id": doc_id,
+            "document_key": doc_key,
+            "unit_type": "annex",
+            "label": label,
+            "number": number,
+            "title": title_text,
+            "breadcrumbs": [doc_key, label],
+            "parent_unit_id": None,
+            "child_unit_ids": [],
+            "page_range": {"start": page_num + 1, "end": end_page_num + 1},
+            "text": annex_text,
+            "text_sha256": sha256_str(annex_text),
+            "confidence": 0.85,
+            "review_status": "pending",
+            "is_uncertain": False,
+            "uncertainty_reason": None,
+        }
+        structural_units.append(unit_obj)
+
+        annex_chunks = split_annex_into_chunks(annex)
+        for chunk_idx, annex_chunk in enumerate(annex_chunks):
+            if annex_chunk["chunk_type"] == "table_block":
+                add_table_from_block(
+                    structural_units,
+                    chunks,
+                    doc_id,
+                    doc_key,
+                    label,
+                    unit_id,
+                    unit_obj,
+                    unit_citation,
+                    unit_global_key,
+                    pages,
+                    annex_chunk,
+                    0.70,
+                )
+                continue
+
+            if annex_chunk["chunk_type"] == "appendix_block" and "Untersuchungsmethoden" in annex_chunk["text"]:
+                add_table_from_block(
+                    structural_units,
+                    chunks,
+                    doc_id,
+                    doc_key,
+                    label,
+                    unit_id,
+                    unit_obj,
+                    unit_citation,
+                    unit_global_key,
+                    pages,
+                    annex_chunk,
+                    0.60,
+                )
+                continue
+
+            if annex_chunk["chunk_type"] == "appendix_block" and annex_chunk.get("line_pages"):
+                grouped = []
+                current_group = None
+                for line, line_page in zip(annex_chunk["lines"], annex_chunk["line_pages"]):
+                    if current_group is None or current_group["page_idx"] != line_page:
+                        if current_group is not None:
+                            grouped.append(current_group)
+                        current_group = {"page_idx": line_page, "lines": []}
+                    current_group["lines"].append(line)
+                if current_group is not None:
+                    grouped.append(current_group)
+                if len(grouped) > 1:
+                    for group_idx, group in enumerate(grouped, start=1):
+                        chunk_text = "\n".join(group["lines"]).strip()
+                        if not chunk_text:
+                            continue
+                        page_number = group["page_idx"] + 1
+                        label_part = "{} Seite {}".format(annex_chunk["label"] or "Anhang", page_number)
+                        chunk_global_key = chunk_slug(unit_global_key, label_part)
+                        chunk_id = "chunk_{}".format(chunk_global_key)
+                        chunk_citation = "{} {}".format(unit_citation, label_part)
+                        chunks.append(
+                            {
+                                "chunk_id": chunk_id,
+                                "global_key": chunk_global_key,
+                                "legal_citation": chunk_citation,
+                                "display_name": chunk_citation,
+                                "chunk_type": "appendix_block",
+                                "unit_id": unit_id,
+                                "parent_chunk_id": None,
+                                "child_chunk_ids": [],
+                                "label": label_part,
+                                "number": None,
+                                "sequence": chunk_idx + group_idx,
+                                "page_id": pages[group["page_idx"]]["page_id"],
+                                "page_range": {"start": page_number, "end": page_number},
+                                "text": chunk_text,
+                                "text_sha256": sha256_str(chunk_text),
+                                "evidence_text": chunk_text,
+                                "confidence": 0.70,
+                                "review_status": "pending",
+                            }
+                        )
+                    continue
+
+            label_part = annex_chunk["label"] or "text"
+            chunk_global_key = chunk_slug(unit_global_key, label_part)
+            chunk_id = "chunk_{}".format(chunk_global_key)
+            if annex_chunk["label"]:
+                chunk_citation = "{} {}".format(unit_citation, annex_chunk["label"])
+            else:
+                chunk_citation = unit_citation
+            chunk_text = annex_chunk["text"]
+            chunk_obj = {
+                "chunk_id": chunk_id,
+                "global_key": chunk_global_key,
+                "legal_citation": chunk_citation,
+                "display_name": chunk_citation,
+                "chunk_type": annex_chunk["chunk_type"],
+                "unit_id": unit_id,
+                "parent_chunk_id": None,
+                "child_chunk_ids": [],
+                "label": annex_chunk["label"],
+                "number": None,
+                "sequence": chunk_idx + 1,
+                "page_id": page_id,
+                "page_range": annex_chunk.get("page_range", {"start": page_num + 1, "end": end_page_num + 1}),
+                "text": chunk_text,
+                "text_sha256": sha256_str(chunk_text),
+                "evidence_text": annex_text,
+                "confidence": 0.75,
+                "review_status": "pending",
+            }
+            chunks.append(chunk_obj)
+
+    # Process waste code units
+    for wc_idx, (page_num, waste_code, waste_text, full_line) in enumerate(all_waste_codes):
+        unit_global_key = chunk_slug(doc_key, "waste_code", waste_code)
+        unit_id = "unit_{}".format(unit_global_key)
+        page_id = pages[page_num]["page_id"]
+
+        unit_obj = {
+            "unit_id": unit_id,
+            "global_key": unit_global_key,
+            "legal_citation": "{} waste code {}".format(citation_prefix, waste_code),
+            "display_name": "{} waste code {}".format(citation_prefix, waste_code),
+            "document_id": doc_id,
+            "document_key": doc_key,
+            "unit_type": "waste_code",
+            "label": waste_code,
+            "number": waste_code,
+            "title": waste_text,
+            "breadcrumbs": [doc_key, "waste_code", waste_code],
+            "parent_unit_id": None,
+            "child_unit_ids": [],
+            "page_range": {"start": page_num + 1, "end": page_num + 1},
+            "text": full_line,
+            "text_sha256": sha256_str(full_line),
+            "confidence": 0.90,
+            "review_status": "pending",
+            "is_uncertain": False,
+            "uncertainty_reason": None,
+        }
+        structural_units.append(unit_obj)
+
+        chunk_global_key = chunk_slug(unit_global_key, "text")
+        chunk_id = "chunk_{}".format(chunk_global_key)
+        chunk_obj = {
+            "chunk_id": chunk_id,
+            "global_key": chunk_global_key,
+            "legal_citation": "{} waste code {}".format(citation_prefix, waste_code),
+            "display_name": "{} waste code {}".format(citation_prefix, waste_code),
+            "chunk_type": "waste_code_entry",
+            "unit_id": unit_id,
+            "parent_chunk_id": None,
+            "child_chunk_ids": [],
+            "label": waste_code,
+            "number": waste_code,
+            "sequence": wc_idx + 1,
+            "page_id": page_id,
+            "page_range": {"start": page_num + 1, "end": page_num + 1},
+            "text": full_line,
+            "text_sha256": sha256_str(full_line),
+            "evidence_text": full_line,
+            "confidence": 0.90,
+            "review_status": "pending",
+        }
+        chunks.append(chunk_obj)
+
+    # Check for low paragraph count issue
+    para_unit_count = sum(1 for u in structural_units if u["unit_type"] == "paragraph")
+    if para_unit_count < 3:
+        issue_id = "issue_{}_low_para".format(make_id(doc_id, "low_para"))
+        issue_obj = {
+            "issue_id": issue_id,
+            "document_id": doc_id,
+            "target_unit_id": None,
+            "target_chunk_id": None,
+            "issue_type": "low_paragraph_count",
+            "severity": "warning",
+            "description": "Document has fewer than 3 paragraph units (found {}).".format(para_unit_count),
+            "evidence": "Only {} paragraph headings detected in PDF.".format(para_unit_count),
+            "corrected_value": None,
+            "review_status": "open",
+        }
+        issues.append(issue_obj)
+
+    doc_obj = {
+        "document_id": doc_id,
+        "source_pdf": source_pdf,
+        "sha256": doc_sha,
+        "title": title,
+        "full_citation": full_citation,
+        "canonical_citation": canonical_citation,
+        "date_enacted": date_enacted,
+        "document_key": doc_key,
+        "citation_prefix": citation_prefix,
+        "abbreviation": doc_metadata.get("abbreviation"),
+        "pages": page_refs,
+        "page_refs": page_refs,
+        "structural_units": structural_units,
+        "chunks": chunks,
+        "metadata": {
+            "pdf_pages": len(reader.pages),
+            "extractor": "extract_normtext",
+            "pypdf_version": getattr(PdfReader, "__version__", "unknown"),
+            "secondary_pdf_backend": "pymupdf" if fitz is not None else None,
+            "text_backend_counts": backend_counts,
+            "backend_comparison": backend_comparison,
+            **doc_metadata,
+        },
+    }
+
+    return doc_obj, issues
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Extract structured text from German legal PDFs.")
+    parser.add_argument("--output", required=True, help="Output JSON path.")
+    parser.add_argument(
+        "--pages-dir",
+        help="Directory for per-page JSON files. Defaults to <output-dir>/pages.",
+    )
+    parser.add_argument("pdfs", nargs="+", help="PDF files to process.")
+    args = parser.parse_args()
+
+    output_path = args.output
+    output_base_dir = os.path.dirname(output_path) or "."
+    os.makedirs(output_base_dir, exist_ok=True)
+    pages_root_dir = args.pages_dir or os.path.join(output_base_dir, "pages")
+
+    all_documents = []
+    all_issues = []
+
+    for pdf_path in args.pdfs:
+        print("Processing: {}".format(pdf_path))
+        doc_obj, issues = extract_document(pdf_path, output_base_dir, pages_root_dir)
+        all_documents.append(doc_obj)
+        all_issues.extend(issues)
+
+    output = {
+        "schema_version": "1.0.0-draft",
+        "phase": "normtext",
+        "documents": all_documents,
+        "review_decisions": [],
+        "extraction_issues": all_issues,
+    }
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+
+    print("Wrote {} documents to {}".format(len(all_documents), output_path))
+
+
+if __name__ == "__main__":
+    main()

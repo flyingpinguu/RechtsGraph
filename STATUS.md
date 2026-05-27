@@ -1,0 +1,343 @@
+# STATUS.md
+
+## 2026-05-17
+
+### Angelegt / Generiert
+- `PROJECT_PLAN.md` – gemeinsamer Projektplan mit Phasen (Normtext → Semantik → Beziehungen)
+- `STATUS.md` – dieser Statusbericht
+- `qwen_context/README.md` – Übersicht der Qwen-Agenten-Kontexte
+- `qwen_context/normtext_extraction_brief.md` – Brief fuer Normtext-Extraktion
+- `qwen_context/review_brief.md` – Brief fuer Review von Extraktionen
+- `qwen_context/output_contract.md` – JSON-Konzept fuer Normtext-Schicht
+
+### Bestehend (vorher)
+- `pdf-neo4j-pipeline/` – Python-Pipeline (Extraktion, Review-Shards, Neo4j-Import)
+- `abfall_pdfs/` – PDF-Quellkorpus Abfallrecht
+- `gefahrgut_pdfs/` – PDF-Quellkorpus Gefahrgut/Chemikalienrecht
+- `guide for relations.md` – Konzept fuer Referenzauflösung im GraphRAG
+
+### Naechste Schritte
+1. Qwen-Subagenten mit `normtext_extraction_brief.md` an echte PDFs testen
+2. Review-Pipeline mit `review_brief.md` validieren
+3. Dokumenttyp-spezifische Extraktoren fuer Abfallrecht und Gefahrgut entwickeln
+4. `output_contract.md` mit den Python-Skripten in `pdf-neo4j-pipeline/` abgleichen
+
+### Pilotlauf Phase 1 Normtext
+- Qwen/Unsloth issue: Subagents failed until Unsloth Studio was started with `unsloth studio run` and the Qwen GGUF model loaded.
+- Created `pdf-neo4j-pipeline/scripts/extract_normtext.py`.
+- Ran pilot extraction for `abfall_pdfs/01_KrWG.pdf`, `abfall_pdfs/02_AVV.pdf`, `gefahrgut_pdfs/GGBefG.pdf`.
+- Output: `pdf-neo4j-pipeline/output/pilot/normtext_pilot.json`.
+- Review inputs/artifacts: `review_input_summary.json`, `review_report.md`, `review_issues.json`.
+- Pilot review decisions: KrWG `needs_revision`, AVV `needs_revision`, GGBefG `accepted_for_pilot`.
+- Next fixes: TOC filtering, legal title/citation extraction, Teil/Abschnitt/Anlage hierarchy, AVV continuation and code hierarchy.
+
+### Review-Gate Test mit Shards
+- Documented improved process in `PROJECT_PLAN.md`: `raw_extraction` -> `review_shards` -> `reviews` -> `reviewed_extraction` -> later graph import.
+- Created `pdf-neo4j-pipeline/scripts/build_review_shards.py` and `pdf-neo4j-pipeline/scripts/merge_reviewed_shards.py`.
+- Ran gated process for `gefahrgut_pdfs/GGBefG.pdf`.
+- Raw output: `pdf-neo4j-pipeline/output/raw_ggbefg.json`.
+- Review shards: `pdf-neo4j-pipeline/output/review_shards/GGBefG/` with 3 shards of 3 pages each.
+- Qwen review outputs: `pdf-neo4j-pipeline/output/reviews/GGBefG/review_shard_001.json`, `review_shard_002.json`, `review_shard_003.json`.
+- All 3 shards were `needs_revision`; therefore `pdf-neo4j-pipeline/output/reviewed/GGBefG_reviewed.json` contains 0 accepted pages, units, and chunks.
+- Main issue pattern: current raw extractor does not handle cross-page paragraph continuations reliably.
+
+### Extractor-Fix und Qwen-Usage-Erfassung
+- Improved `pdf-neo4j-pipeline/scripts/extract_normtext.py` for GGBefG-style paragraph extraction:
+  - Paragraph units are now detected across the whole document, not independently per page.
+  - Repeating `gesetze-im-internet.de` page headers are removed from unit text.
+  - Section chunks no longer split a bare paragraph heading away from its first subsection.
+  - First-page metadata extraction now captures title, abbreviation, full citation, enactment date, and status note where present.
+- Re-ran GGBefG extraction:
+  - Raw output: `pdf-neo4j-pipeline/output/raw_ggbefg_v2.json`.
+  - Review shards: `pdf-neo4j-pipeline/output/review_shards/GGBefG_v2/`.
+  - Fixed cross-page ranges include `§ 2` pages 1-2, `§ 3` pages 2-3, `§ 5` pages 3-4, `§ 7` pages 4-5, `§ 8` pages 5-6, `§ 9a` pages 7-8, `§ 11` pages 8-9.
+- Added `pdf-neo4j-pipeline/scripts/qwen_chat_with_usage.py`.
+  - Calls local Unsloth/Qwen through `/v1/chat/completions`.
+  - Persists `usage`, `timings`, `input_context_tokens`, and `context_tokens` to JSONL.
+  - Smoke test wrote `pdf-neo4j-pipeline/output/qwen_usage.jsonl`.
+
+### Manuelles Review `GGBefG_v2`
+- Qwen worker reasoning effort set to `high` in `/Users/christinck/.codex/agents/qwen-full-access.toml`.
+- Manual review result: raw extraction fixes the main cross-page truncations from the first GGBefG review.
+- Remaining blocker is shard packaging, not paragraph extraction:
+  - Shards include full cross-page units/chunks when they intersect the shard range.
+  - The `pages` evidence inside each shard only contains the nominal shard pages.
+  - Therefore some extracted units contain text from pages not present as evidence in the same shard, e.g. `§ 5` in shard 1/2 and `§ 9` in shard 2/3.
+- Next fix: `build_review_shards.py` should either include all evidence pages needed by included units/chunks or split cross-boundary units into review-local excerpts with explicit continuation metadata.
+
+### Shard-Builder-Fix
+- Improved `pdf-neo4j-pipeline/scripts/build_review_shards.py`.
+  - Shards keep their nominal `page_range`.
+  - Shards now include `nominal_page_range`, `evidence_page_range`, `nominal_pages`, and `evidence_pages`.
+  - `pages` is currently the full evidence page list for backward compatibility with existing reviewers.
+  - Evidence pages are expanded to cover every included cross-page unit/chunk.
+  - Table-ready support added for document-level `tables`, `extracted_tables`, `table_rows`, and `extracted_table_rows`.
+- Rebuilt GGBefG shards into `pdf-neo4j-pipeline/output/review_shards/GGBefG_v3/`.
+  - `shard_001`: nominal pages 1-3, evidence pages 1-4.
+  - `shard_002`: nominal pages 4-6, evidence pages 3-7.
+  - `shard_003`: nominal pages 7-9, evidence pages 6-9.
+- Added and ran synthetic table shard test at `pdf-neo4j-pipeline/output/review_shards/table_test/`.
+
+### Qwen-Review-Lauf `GGBefG_v3`
+- Review prompts written to `pdf-neo4j-pipeline/output/review_prompts/GGBefG_v3/`.
+- Qwen review outputs written to `pdf-neo4j-pipeline/output/reviews/GGBefG_v3/`.
+- Qwen context/usage telemetry written to `pdf-neo4j-pipeline/output/usage/qwen_usage_GGBefG_v3_reviews.jsonl`.
+- Review summary written to `pdf-neo4j-pipeline/output/reviews/GGBefG_v3/review_summary.json`.
+- Decisions:
+  - `shard_001`: `accepted`, 0 issues, `input_context_tokens=35902`, `context_tokens=36051`.
+  - `shard_002`: `needs_revision`, 2 issues, `input_context_tokens=43355`, `context_tokens=43988`.
+  - `shard_003`: first full prompt failed without usage/timings; compact retry succeeded with `accepted`, 0 issues, `input_context_tokens=17035`, `context_tokens=17183`.
+- Reviewed merge output: `pdf-neo4j-pipeline/output/reviewed/GGBefG_v3_reviewed.json`.
+  - Accepted shards: 2 (`shard_001`, `shard_003`).
+  - Skipped shards: 1 (`shard_002`).
+  - Output contains 8 pages, 13 units, 42 chunks.
+- Note: because evidence shards include full cross-page units, accepted neighboring shards can include content that reaches into nominally skipped page ranges. Merge policy should be made stricter/explicit before scaling.
+
+### Telemetrie- und Extraktor-Fix `GGBefG_v4`
+- Clarified Qwen telemetry in `pdf-neo4j-pipeline/scripts/qwen_chat_with_usage.py`.
+  - Stores `prompt_tokens`, `completion_tokens`, `output_tokens`, `total_tokens`, `thinking_tokens`, `thinking_tokens_reported`, `input_context_tokens`, `max_context_tokens`, and `context_tokens`.
+  - Current Unsloth launch has thinking disabled (`enable_thinking=false`), and llama.cpp does not report thinking tokens separately in these calls.
+- Improved `pdf-neo4j-pipeline/scripts/extract_normtext.py`.
+  - Added optional PyMuPDF backend for fallback/comparison.
+  - Added per-page `text_extraction_backend` and backend hashes.
+  - Added metadata for `secondary_pdf_backend`, backend counts, and backend comparisons.
+  - Added source-text anomaly detection without silently rewriting legal text.
+- Added `pdf-neo4j-pipeline/requirements.txt` with `pypdf` and `pymupdf`.
+- Re-ran extraction:
+  - Raw output: `pdf-neo4j-pipeline/output/raw_ggbefg_v4.json`.
+  - Shards: `pdf-neo4j-pipeline/output/review_shards/GGBefG_v4/`.
+  - Reviewed output: `pdf-neo4j-pipeline/output/reviewed/GGBefG_v4_reviewed.json`.
+- `§ 7b Abs. 3` source anomaly is now recorded as `possible_missing_verb_in_source_text` on page 5 and included in `shard_002`.
+- Re-reviewed `shard_002` with this issue context:
+  - Decision: `accepted`.
+  - Context usage: `prompt_tokens=44938`, `completion_tokens=132`, `input_context_tokens=44938`, `max_context_tokens=45070`, `thinking_tokens=null`.
+- `GGBefG_v4_reviewed.json` now contains all 3 accepted shards: 9 pages, 18 units, 55 chunks.
+
+### Qwen-Server mit Thinking
+- Restarted local Unsloth/Qwen server on `2026-05-19`.
+- Previous effective `llama-server` command had `--chat-template-kwargs {"enable_thinking": false}`.
+- New parent command appends `--chat-template-kwargs {"enable_thinking":true}`.
+- Observed child command contains both kwargs in order: first `false`, then appended `true`.
+- Smoke test confirms visible Qwen thinking is active:
+  - Output before wrapper cleanup contained a leading `<think>...</think>` block.
+  - Telemetry file: `pdf-neo4j-pipeline/output/usage/qwen_usage_thinking_smoke.jsonl`.
+  - Clean output file: `pdf-neo4j-pipeline/output/smoke/qwen_thinking_true_smoke_clean.txt`.
+- Updated `pdf-neo4j-pipeline/scripts/qwen_chat_with_usage.py`.
+  - Leading `<think>...</think>` content is stripped from the saved final output by default.
+  - Telemetry now records `thinking_output_present`, `thinking_output_chars`, and `final_output_chars`.
+  - `thinking_tokens` still remains `null` unless Unsloth/llama.cpp reports a separate token field; visible thinking is currently included in completion/output token counts.
+
+### Aufräumen der Artefakte
+- Removed obsolete/generated pilot, smoke, render-check, table-test, and GGBefG v1-v3 outputs.
+- Removed obsolete review prompt files and raw review text dumps.
+- Removed `.DS_Store` files under the project.
+- Current retained output set is intentionally small:
+  - `pdf-neo4j-pipeline/output/raw_ggbefg_v4.json`
+  - `pdf-neo4j-pipeline/output/review_shards/GGBefG_v4/`
+  - `pdf-neo4j-pipeline/output/reviews/GGBefG_v4/`
+  - `pdf-neo4j-pipeline/output/reviewed/GGBefG_v4_reviewed.json`
+  - `pdf-neo4j-pipeline/output/usage/qwen_usage_GGBefG_v4_reviews.jsonl`
+  - `pdf-neo4j-pipeline/output/usage/qwen_usage_thinking_smoke.jsonl`
+
+### Extractor-Struktur-Upgrade für zitierbare Units/Chunks
+- Improved `pdf-neo4j-pipeline/scripts/extract_normtext.py`.
+  - Structural units now receive readable global IDs and keys, e.g. `unit_versatzv_para_4`, `global_key=versatzv_para_4`.
+  - Structural units now include `legal_citation`, `display_name`, `document_key`, `title`, and `text_sha256`.
+  - Chunks now include `global_key`, `legal_citation`, `display_name`, `chunk_type`, `parent_chunk_id`, `child_chunk_ids`, `label`, `number`, and `sequence`.
+  - Paragraph chunks are split into `subsection` chunks where `(1)`, `(2)` etc. exist.
+  - Numbered and lettered list items are extracted as `list_item` child chunks.
+  - Nested list items are represented, e.g. `VersatzV § 4 Abs. 2 Nr. 2` has children `Buchst. a` and `Buchst. b`.
+  - `Anlage ...` headings are now recognized as structural-unit boundaries so paragraph text does not run into annexes.
+  - Anlagen are extracted as `annex` units with coarse chunks such as `annex_text`, `table_block`, `annex_section`, and `appendix_block`.
+- Re-ran extraction for `abfall_pdfs/09_VersatzV.pdf`.
+  - Raw output: `pdf-neo4j-pipeline/output/raw_versatzv_v2.json`.
+  - Result: 15 pages, 11 structural units (`7 paragraph`, `4 annex`), 64 chunks.
+  - `§ 7` now ends on page 2 instead of incorrectly spanning pages 2-15.
+  - Review shards created in `pdf-neo4j-pipeline/output/review_shards/VersatzV_v2/`.
+- Smoke-tested the upgraded extractor on `gefahrgut_pdfs/GGBefG.pdf`; extraction completed with 18 paragraph units and the new chunk fields.
+- Updated `qwen_context/output_contract.md` to document the new fields and ID rules.
+
+### Flaches Modell, ausgelagerte Seiten und Tabellenchunks
+- Updated the extraction model after design review.
+  - The canonical raw document JSON no longer stores full page text inline.
+  - Page text is written to separate JSON files under `pdf-neo4j-pipeline/output/pages/<document_key>/page_XXX.json`.
+  - Main document JSON keeps `page_refs` and a text-free `pages` compatibility array with `path`, `page_number`, `page_id`, `text_sha256`, and backend metadata.
+  - `build_review_shards.py` now loads required page text from page refs before writing review shards.
+- Removed automatic paragraph list-item subchunking for now.
+  - Absatz chunks such as `§ 4 Abs. 2` stay intact even if they contain numbered or lettered lists.
+  - No `list_item` chunks are emitted in the current default extraction.
+- Added first-pass table handling.
+  - Tables inside Anlagen are modeled as `table` structural units under their parent `annex` unit.
+  - Table retrieval chunks use `chunk_type=table_rows`.
+  - Table row chunks contain at most 10 extracted row lines.
+  - Each table row chunk includes `columns`, `column_header_text`, `row_range`, `rows`, and `text` with the column headers prepended.
+- Re-ran extraction for `abfall_pdfs/09_VersatzV.pdf`.
+  - Raw output: `pdf-neo4j-pipeline/output/raw_versatzv_v3.json`.
+  - Page files: `pdf-neo4j-pipeline/output/pages/versatzv/page_001.json` through `page_015.json`.
+  - Review shards: `pdf-neo4j-pipeline/output/review_shards/VersatzV_v3/`.
+  - Result: 15 page refs, 14 structural units (`7 paragraph`, `4 annex`, `3 table`), 56 chunks.
+  - Chunk types: `subsection`, `paragraph_text`, `annex_text`, `annex_section`, `table_rows`, `appendix_block`.
+  - Table examples: `VersatzV Anlage 2 Tabelle 1`, `Tabelle 1a`, and `Tabelle 2` are table units with row chunks.
+- Removed obsolete `raw_versatzv_v2.json` and `review_shards/VersatzV_v2/`.
+
+### Review-Brief und VersatzV-v3-Reviewtest
+- Updated `qwen_context/review_brief.md`.
+  - The brief now matches the current flat model with `extracted_units`, `extracted_chunks`, page/evidence pages, ausgelagerten page refs in raw JSON, and table row chunks.
+  - It explicitly says paragraph list items are not separate chunks for now.
+  - It defines strict JSON-only review output with `decision`, `confidence`, `summary`, `checked_items`, and `issues`.
+- Improved `pdf-neo4j-pipeline/scripts/build_review_shards.py`.
+  - Review shards now compact redundant fields before prompting:
+    - `extracted_units[].text` is replaced with hash/count/preview.
+    - `extracted_chunks[].evidence_text` is replaced with hash/count.
+  - This reduced VersatzV review shard size from ~2.2 MB total to ~575 KB total.
+- Initial direct Unsloth `/v1/chat/completions` review attempt failed.
+  - Server was not running at first (`Connection refused`).
+  - After restart, Unsloth returned SSE `server_error` even for a tiny prompt.
+  - No usable Unsloth review outputs were produced.
+- Initial autonomous `qwen_full_access` subagent review attempt was also stopped.
+  - Five agents were started, one per shard.
+  - They ran for several minutes without writing review files.
+  - They were shut down and replaced with direct Ollama model calls for measurable telemetry.
+- Added `pdf-neo4j-pipeline/scripts/ollama_review_shards.py`.
+  - Calls Ollama `/api/chat` directly.
+  - Logs `prompt_eval_count`, `eval_count`, durations, bytes, model, and settings to JSONL.
+  - Uses model `qwen3.6:35b-a3b-q8_0`, `temperature=0.1`, `num_ctx=65536`, `num_predict=8192`, `think=false`.
+- Ran VersatzV v3 review over all five shards.
+  - Review outputs: `pdf-neo4j-pipeline/output/reviews/VersatzV_v3/review_shard_001.json` through `review_shard_005.json`.
+  - Summary: `pdf-neo4j-pipeline/output/reviews/VersatzV_v3/review_summary.json`.
+  - Token/duration log: `pdf-neo4j-pipeline/output/usage/ollama_usage_VersatzV_v3_reviews.jsonl`.
+  - Results:
+    - `shard_001`: `accepted`, 0 issues, prompt tokens 26,762, output tokens 3,840, wall time 236.976 s.
+    - `shard_002`: `needs_revision`, 7 issues, prompt tokens 40,454, output tokens 2,036, wall time 185.457 s.
+    - `shard_003`: `rejected`, 4 issues, prompt tokens 33,108, output tokens 1,462, wall time 143.380 s.
+    - `shard_004`: `needs_revision`, 5 issues, prompt tokens 55,804, output tokens 1,486, wall time 260.585 s.
+    - `shard_005`: `needs_revision`, 2 issues, prompt tokens 29,989, output tokens 1,252, wall time 124.849 s.
+- Review findings indicate next extractor/shard-builder work:
+  - Table 2 parsing in Anlage 2 needs improvement; footnotes and prose are being treated as rows.
+  - Anlage 3/4 sectioning creates long coarse chunks and page ranges that are too broad.
+  - Evidence-page expansion still becomes too wide for long annex units.
+  - Table-like appendices in Anlage 3 are not yet modeled as table units/chunks.
+
+### Fokus-Fix VersatzV Tabellen und Review-Shards
+- Worked through the criticism from the VersatzV reviews on `shard_002` and `shard_004`.
+- Updated `pdf-neo4j-pipeline/scripts/extract_normtext.py`.
+  - Table 2 in Anlage 2 is now kept as one `table` unit with explicit `table_sections`.
+  - The organic and inorganic row chunks now carry their own `table_section`, matching `column_header_text`, row ranges, and page ranges.
+  - Table notes/footnotes for the organic section are emitted as `table_note`, not as `table_rows`.
+  - `Untersuchungsparameter` appendix tables are grouped into logical rows instead of raw PDF line fragments.
+  - ISO/DIN norm notices below appendix tables are emitted as `table_note`.
+  - Table row and note chunks now get more precise page ranges from source line pages.
+  - A feature flag `SPLIT_TABLE_SECTIONS_AS_UNITS = False` records the current decision to keep multi-section tables as one table unit with sectioned chunks.
+- Updated `pdf-neo4j-pipeline/scripts/build_review_shards.py`.
+  - Direct/recursive child units are included when their full pages are already in the evidence window. This reduces false "missing child unit" findings for visible evidence pages.
+- Updated review context.
+  - `qwen_context/review_brief.md` documents `table_section`, `table_sections`, concise output limits, and the fact that chunks are linked by `chunk.unit_id`.
+  - `qwen_context/output_contract.md` documents `table_section`/`table_sections`.
+  - Added `qwen_context/review_brief_focused_regression.md` for targeted regression checks after extractor fixes.
+- Rebuilt VersatzV final candidate:
+  - Raw output: `pdf-neo4j-pipeline/output/raw_versatzv_v15.json`.
+  - Review shards: `pdf-neo4j-pipeline/output/review_shards/VersatzV_v15/`.
+  - Page files remain under `pdf-neo4j-pipeline/output/pages/versatzv/`.
+  - Result: 16 structural units (`7 paragraph`, `4 annex`, `5 table`) and 63 chunks (`10 table_rows`, `5 table_note`).
+- Focused review results with local Ollama/Qwen:
+  - Model: `qwen3.6:35b-a3b-q8_0`, `num_ctx=65536`, `num_predict=1024`, `temperature=0.0`, `think=false`.
+  - Usage log: `pdf-neo4j-pipeline/output/usage/ollama_usage_VersatzV_v15_focus_reviews.jsonl`.
+  - `shard_004` focused regression review accepted with 0 issues.
+  - `shard_002` focused regression review completed but produced a false finding: it claimed the organic Tabelle-2 chunk had the anorganic header even though the JSON has `table_section="Organische Stoffe"` and `column_header_text="Organische Stoffe Konzentration (in mikrog/l)"`.
+- Assessment:
+  - The extractor fixes for the original concrete issues are visible in the JSON.
+  - The local LLM reviewer is useful for finding new risks, but for dense table shards it can contradict itself and must be treated as advisory, not authoritative.
+
+### Aufraeumen und Shard-Seitenmodell
+- Local reviewer work is paused for now.
+- Updated `pdf-neo4j-pipeline/scripts/build_review_shards.py`.
+  - Review shards no longer write the duplicate `pages` field.
+  - `nominal_pages` is now text-free metadata only.
+  - `nominal_page_numbers` and `evidence_page_numbers` are written explicitly.
+  - `evidence_pages` is the only shard field containing full page text.
+- Rebuilt the current VersatzV shards:
+  - Raw output kept as `pdf-neo4j-pipeline/output/raw_versatzv_current.json`.
+  - Shards kept as `pdf-neo4j-pipeline/output/review_shards/VersatzV_current/`.
+  - Page JSONs kept under `pdf-neo4j-pipeline/output/pages/versatzv/`.
+- Removed old generated artifacts:
+  - old `raw_versatzv_v*.json` and `raw_ggbefg_v4.json`
+  - old `output/reviews/`, `output/review_prompts/`, `output/reviewed/`, and `output/usage/`
+  - old review shard directories except `VersatzV_current`
+  - `.DS_Store` files
+- Removed obsolete reviewer/merge scripts while local review is paused:
+  - `pdf-neo4j-pipeline/scripts/qwen_chat_with_usage.py`
+  - `pdf-neo4j-pipeline/scripts/ollama_review_shards.py`
+  - `pdf-neo4j-pipeline/scripts/merge_reviewed_shards.py`
+- Active scripts now:
+  - `pdf-neo4j-pipeline/scripts/extract_normtext.py`
+  - `pdf-neo4j-pipeline/scripts/build_review_shards.py`
+  - `pdf-neo4j-pipeline/scripts/extract_content_nodes.py`
+  - `pdf-neo4j-pipeline/scripts/extract_reference_relations.py`
+  - `pdf-neo4j-pipeline/scripts/export_neo4j_cypher.py`
+
+### Content-Node-Modell
+- Added `CONTENT_NODE_MODEL.md`.
+- Decision recorded: the first graph layer consists of deterministic content
+  nodes only (`Document`, `StructuralUnit`, `Chunk`).
+- PDF pages remain external evidence JSONs for now, not Neo4j nodes.
+- Concepts, legal actors, duties, permissions, and norm references are excluded
+  from this layer.
+- Later reference extraction should happen on the lowest reliable level
+  (`Chunk -> target reference`); paragraph- and document-level relations are
+  derived deterministically from the content hierarchy and stored as
+  `REFERS_TO` on their respective levels.
+
+### Content-Node-Export-Skript
+- Added `pdf-neo4j-pipeline/scripts/extract_content_nodes.py`.
+- The script exports deterministic content graph payloads from raw extraction
+  JSON: `Document`, `StructuralUnit`, `Chunk`, plus hierarchy and sequence
+  relationships.
+- Table chunks with nested `rows` are flattened for Neo4j-compatible
+  properties while preserving full rows in `rows_json`.
+
+### Neo4j-Cypher-Export
+- Added `pdf-neo4j-pipeline/scripts/export_neo4j_cypher.py`.
+- The script converts `output/content_nodes/*.json` into executable Cypher with
+  label-specific `graph_id` uniqueness constraints, node batches and
+  relationship batches.
+- `ContentNode` is not exported as a Neo4j label. Content status is represented
+  by properties (`is_content_node`, `node_group`) so Neo4j visualization can
+  style concrete labels such as `Document`, `StructuralUnit`, and `Chunk`.
+
+### Tabellenzeilen-Chunking
+- Updated `pdf-neo4j-pipeline/scripts/extract_normtext.py`.
+- `table_rows` chunks now group up to 40 table rows instead of 10.
+- Table notes remain grouped separately with a smaller limit because they are
+  explanatory text, not regular table rows.
+
+### Reference-Relation-Modell
+- Added `REFERENCE_RELATION_MODEL.md`.
+- Corpus scan result: many external references use long-name genitive patterns
+  such as `§ ... des Kreislaufwirtschaftsgesetzes`, but abbreviation forms such
+  as `§ 21 ElektroG` and article references such as `Artikel 13 Absatz 1 des
+  Grundgesetzes` also occur.
+- Decision recorded: reference extraction should create primary
+  `Chunk -> target reference` records, using long-name `title_key`s for unknown
+  external documents and resolving aliases later.
+
+### Reference-Relation-Extractor
+- Added `pdf-neo4j-pipeline/scripts/extract_reference_relations.py`.
+- The script reads content graph JSON and adds deterministic `REFERS_TO`
+  relations from chunks plus deterministic rollups to structural-unit and
+  document level. Unresolved or partially resolved targets are represented with
+  `ReferenceTarget` placeholders.
+- Rebuilt VersatzV reference graph and Cypher export:
+  - `pdf-neo4j-pipeline/output/content_nodes/versatzv_content_graph_with_refs.json`
+  - `pdf-neo4j-pipeline/output/neo4j/versatzv_import_with_refs.cypher`
+- Added a reference-level validation guard: `Chunk` references may target only
+  `Chunk` or `ReferenceTarget`; `StructuralUnit` references may target only
+  `StructuralUnit` or `ReferenceTarget`; `Document` references may target only
+  `Document` or `ReferenceTarget`.
+- Added `NEO4J_QUERIES.md` with practical Cypher queries for visualization,
+  reference inspection, graph counts, table chunks, and import cleanup.
+- Expanded `NEO4J_QUERIES.md` with the focused view:
+  `Document`/`StructuralUnit` nodes plus `CONTAINS_UNIT` and `REFERS_TO`.
+- Added `NODE_PROPERTY_REVIEW.md` with a first schema-slimming proposal.
+- Initialized a local Git repository for the project. Generated outputs and
+  virtual environments are ignored; source PDFs, scripts, and documentation are
+  versioned.
