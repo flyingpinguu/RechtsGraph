@@ -15,6 +15,72 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+COMMON_CONTENT_PROPERTIES = {
+    "global_key",
+    "display_name",
+    "legal_citation",
+}
+
+NEO4J_NODE_PROPERTY_ALLOWLIST = {
+    "Document": {
+        "document_key",
+        "document_global_key",
+        "global_key",
+        "title",
+        "short_title",
+        "canonical_citation",
+        "abbreviation",
+        "source_pdf",
+        "sha256",
+        "page_count",
+    },
+    "StructuralUnit": COMMON_CONTENT_PROPERTIES | {
+        "unit_type",
+        "document_key",
+        "document_global_key",
+        "label",
+        "number",
+        "title",
+        "page_start",
+        "page_end",
+        "text_sha256",
+        "text_char_count",
+        "text_preview",
+        "column_header_text",
+        "row_count",
+        "note_count",
+        "table_sections",
+    },
+    "Chunk": COMMON_CONTENT_PROPERTIES | {
+        "chunk_type",
+        "unit_id",
+        "document_global_key",
+        "label",
+        "number",
+        "sequence",
+        "page_start",
+        "page_end",
+        "text",
+        "text_sha256",
+        "table_section",
+        "column_header_text",
+        "row_start",
+        "row_end",
+        "row_count_in_chunk",
+        "rows_json",
+    },
+    "ReferenceTarget": {
+        "global_key",
+        "status",
+        "target_document_key",
+        "target_level",
+        "reference_kind",
+        "display_name",
+        "target_title_key",
+        "nearest_resolved_target_id",
+    },
+}
+
 
 def load_json(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as fh:
@@ -78,6 +144,22 @@ def node_group_for_labels(labels: Iterable[str]) -> str:
     return "graph_node"
 
 
+def primary_label(labels: Iterable[str]) -> str:
+    label_set = set(labels)
+    for label in ("Document", "StructuralUnit", "Chunk", "ReferenceTarget"):
+        if label in label_set:
+            return label
+    return next(iter(labels), "")
+
+
+def filter_node_properties(labels: Iterable[str], props: Dict[str, Any]) -> Dict[str, Any]:
+    label = primary_label(labels)
+    allowed = NEO4J_NODE_PROPERTY_ALLOWLIST.get(label)
+    if allowed is None:
+        return dict(props)
+    return {key: value for key, value in props.items() if key in allowed}
+
+
 def constraint_name_for_label(label: str) -> str:
     return "{}_graph_id".format(slugify_identifier(label))
 
@@ -95,7 +177,7 @@ def emit_node_batch(lines: List[str], labels: Tuple[str, ...], rows: List[Dict[s
         {
             "id": row["id"],
             "properties": {
-                **(row.get("properties") or {}),
+                **filter_node_properties(labels, row.get("properties") or {}),
                 "node_group": node_group_for_labels(labels),
                 "is_content_node": node_group_for_labels(labels) == "content_node",
             },

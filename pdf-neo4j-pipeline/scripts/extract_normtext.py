@@ -85,6 +85,14 @@ def doc_key_from_metadata(source_pdf, canonical_citation, metadata):
     return slugify(os.path.splitext(os.path.basename(source_pdf))[0])
 
 
+def document_global_key_from_metadata(source_pdf, title, canonical_citation, metadata):
+    long_name = (metadata or {}).get("short_title") or title or canonical_citation
+    key = slugify(long_name)
+    if key:
+        return key
+    return doc_key_from_metadata(source_pdf, canonical_citation, metadata)
+
+
 def paragraph_number(label):
     return label.replace("\u00a7", "").strip()
 
@@ -817,6 +825,7 @@ def add_table_from_block(
     chunks,
     doc_id,
     doc_key,
+    document_global_key,
     annex_label,
     annex_unit_id,
     annex_unit_obj,
@@ -902,11 +911,12 @@ def add_table_from_block(
             ),
             "document_id": doc_id,
             "document_key": doc_key,
+            "document_global_key": document_global_key,
             "unit_type": "table",
             "label": spec["label"],
             "number": slugify(spec["label"].replace("Tabelle", "").replace("Anhang", "")).replace("_", ""),
             "title": table.get("title"),
-            "breadcrumbs": [doc_key, annex_label, spec["label"]],
+            "breadcrumbs": [document_global_key, annex_label, spec["label"]],
             "parent_unit_id": annex_unit_id,
             "child_unit_ids": [],
             "page_range": unit_page_range,
@@ -953,6 +963,7 @@ def add_table_from_block(
                         "display_name": chunk_citation,
                         "chunk_type": "table_rows",
                         "unit_id": table_unit_id,
+                        "document_global_key": document_global_key,
                         "parent_chunk_id": None,
                         "child_chunk_ids": [],
                         "label": "{}rows_{}_{}".format(
@@ -999,6 +1010,7 @@ def add_table_from_block(
                         "display_name": chunk_citation,
                         "chunk_type": "table_note",
                         "unit_id": table_unit_id,
+                        "document_global_key": document_global_key,
                         "parent_chunk_id": None,
                         "child_chunk_ids": [],
                         "label": "{}notes_{}_{}".format(
@@ -1191,6 +1203,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
     doc_id = "doc_{}".format(make_id(pdf_path))
     source_pdf = os.path.basename(pdf_path)
     doc_key = doc_key_from_metadata(source_pdf, canonical_citation, doc_metadata)
+    document_global_key = document_global_key_from_metadata(source_pdf, title, canonical_citation, doc_metadata)
     citation_prefix = doc_metadata.get("abbreviation") or canonical_citation or doc_key
     page_refs = write_page_files(pages, doc_key, output_base_dir, pages_root_dir)
     structural_units = []
@@ -1206,7 +1219,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
         title_text = para.get("title")
         number = paragraph_number(label)
         para_text = para["text"]
-        unit_global_key = unit_slug(doc_key, "para", number)
+        unit_global_key = unit_slug(document_global_key, "para", number)
         unit_id = "unit_{}".format(unit_global_key)
         unit_citation = legal_citation(citation_prefix, "paragraph", label, title_text)
         page_id = pages[page_num]["page_id"]
@@ -1221,11 +1234,12 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
             "display_name": "{}{}".format(unit_citation, " {}".format(title_text) if title_text else ""),
             "document_id": doc_id,
             "document_key": doc_key,
+            "document_global_key": document_global_key,
             "unit_type": "paragraph",
             "label": label,
             "number": number,
             "title": title_text,
-            "breadcrumbs": [doc_key, label],
+            "breadcrumbs": [document_global_key, label],
             "parent_unit_id": None,
             "child_unit_ids": [],
             "page_range": {"start": page_num + 1, "end": end_page_num + 1},
@@ -1256,6 +1270,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
                 "display_name": chunk_citation,
                 "chunk_type": chunk_type,
                 "unit_id": unit_id,
+                "document_global_key": document_global_key,
                 "parent_chunk_id": None,
                 "child_chunk_ids": [],
                 "label": chunk_label,
@@ -1279,7 +1294,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
         title_text = annex.get("title")
         number = label.replace("Anlage", "").strip()
         annex_text = annex["text"]
-        unit_global_key = unit_slug(doc_key, "anlage", number)
+        unit_global_key = unit_slug(document_global_key, "anlage", number)
         unit_id = "unit_{}".format(unit_global_key)
         unit_citation = legal_citation(citation_prefix, "annex", label, title_text)
         page_id = pages[page_num]["page_id"]
@@ -1291,11 +1306,12 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
             "display_name": "{}{}".format(unit_citation, " {}".format(title_text) if title_text else ""),
             "document_id": doc_id,
             "document_key": doc_key,
+            "document_global_key": document_global_key,
             "unit_type": "annex",
             "label": label,
             "number": number,
             "title": title_text,
-            "breadcrumbs": [doc_key, label],
+            "breadcrumbs": [document_global_key, label],
             "parent_unit_id": None,
             "child_unit_ids": [],
             "page_range": {"start": page_num + 1, "end": end_page_num + 1},
@@ -1316,6 +1332,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
                     chunks,
                     doc_id,
                     doc_key,
+                    document_global_key,
                     label,
                     unit_id,
                     unit_obj,
@@ -1333,6 +1350,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
                     chunks,
                     doc_id,
                     doc_key,
+                    document_global_key,
                     label,
                     unit_id,
                     unit_obj,
@@ -1373,6 +1391,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
                                 "display_name": chunk_citation,
                                 "chunk_type": "appendix_block",
                                 "unit_id": unit_id,
+                                "document_global_key": document_global_key,
                                 "parent_chunk_id": None,
                                 "child_chunk_ids": [],
                                 "label": label_part,
@@ -1404,6 +1423,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
                 "display_name": chunk_citation,
                 "chunk_type": annex_chunk["chunk_type"],
                 "unit_id": unit_id,
+                "document_global_key": document_global_key,
                 "parent_chunk_id": None,
                 "child_chunk_ids": [],
                 "label": annex_chunk["label"],
@@ -1421,7 +1441,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
 
     # Process waste code units
     for wc_idx, (page_num, waste_code, waste_text, full_line) in enumerate(all_waste_codes):
-        unit_global_key = chunk_slug(doc_key, "waste_code", waste_code)
+        unit_global_key = chunk_slug(document_global_key, "waste_code", waste_code)
         unit_id = "unit_{}".format(unit_global_key)
         page_id = pages[page_num]["page_id"]
 
@@ -1432,11 +1452,12 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
             "display_name": "{} waste code {}".format(citation_prefix, waste_code),
             "document_id": doc_id,
             "document_key": doc_key,
+            "document_global_key": document_global_key,
             "unit_type": "waste_code",
             "label": waste_code,
             "number": waste_code,
             "title": waste_text,
-            "breadcrumbs": [doc_key, "waste_code", waste_code],
+            "breadcrumbs": [document_global_key, "waste_code", waste_code],
             "parent_unit_id": None,
             "child_unit_ids": [],
             "page_range": {"start": page_num + 1, "end": page_num + 1},
@@ -1458,6 +1479,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
             "display_name": "{} waste code {}".format(citation_prefix, waste_code),
             "chunk_type": "waste_code_entry",
             "unit_id": unit_id,
+            "document_global_key": document_global_key,
             "parent_chunk_id": None,
             "child_chunk_ids": [],
             "label": waste_code,
@@ -1500,6 +1522,8 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
         "canonical_citation": canonical_citation,
         "date_enacted": date_enacted,
         "document_key": doc_key,
+        "document_global_key": document_global_key,
+        "global_key": document_global_key,
         "citation_prefix": citation_prefix,
         "abbreviation": doc_metadata.get("abbreviation"),
         "pages": page_refs,

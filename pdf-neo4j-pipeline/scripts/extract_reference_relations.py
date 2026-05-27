@@ -275,6 +275,7 @@ class ReferenceExtractor:
         self.global_to_node_id: Dict[str, str] = {}
         self.document_by_id: Dict[str, Dict[str, Any]] = {}
         self.document_key_by_id: Dict[str, str] = {}
+        self.document_alias_to_global_key: Dict[str, str] = {}
         self.unit_by_id: Dict[str, Dict[str, Any]] = {}
         self.chunk_by_id: Dict[str, Dict[str, Any]] = {}
         self.chunks_by_unit_id: Dict[str, List[Dict[str, Any]]] = {}
@@ -295,13 +296,19 @@ class ReferenceExtractor:
                 self.global_to_node_id[global_key] = node["id"]
             if "Document" in labels:
                 self.document_by_id[node["id"]] = node
+                document_global_key = props.get("document_global_key") or props.get("global_key") or props.get("document_key")
                 if props.get("document_key"):
                     self.document_key_by_id[node["id"]] = props["document_key"]
                     self.global_to_node_id[props["document_key"]] = node["id"]
-                for alias_field in ("canonical_citation", "abbreviation", "title"):
+                if document_global_key:
+                    self.document_alias_to_global_key[slugify(document_global_key)] = document_global_key
+                for alias_field in ("document_key", "canonical_citation", "abbreviation", "title", "short_title"):
                     alias = props.get(alias_field)
                     if alias:
-                        self.global_to_node_id[slugify(alias)] = node["id"]
+                        alias_key = slugify(alias)
+                        self.global_to_node_id[alias_key] = node["id"]
+                        if document_global_key:
+                            self.document_alias_to_global_key[alias_key] = document_global_key
             if "StructuralUnit" in labels:
                 self.unit_by_id[node["id"]] = node
             if "Chunk" in labels:
@@ -322,9 +329,33 @@ class ReferenceExtractor:
         props = chunk.get("properties") or {}
         unit = self.unit_by_id.get(props.get("unit_id") or "")
         if unit:
-            return (unit.get("properties") or {}).get("document_key") or ""
+            unit_props = unit.get("properties") or {}
+            return (
+                unit_props.get("document_global_key")
+                or unit_props.get("global_key", "").split("_para_", 1)[0].split("_anlage_", 1)[0]
+                or unit_props.get("document_key")
+                or ""
+            )
         global_key = props.get("global_key") or ""
         return global_key.split("_", 1)[0] if "_" in global_key else ""
+
+    def document_aliases_for_chunk(self, chunk: Dict[str, Any]) -> set:
+        aliases = set()
+        props = chunk.get("properties") or {}
+        unit = self.unit_by_id.get(props.get("unit_id") or "")
+        if unit:
+            unit_props = unit.get("properties") or {}
+            if unit_props.get("document_key"):
+                aliases.add(slugify(unit_props["document_key"]))
+            if unit_props.get("document_global_key"):
+                aliases.add(slugify(unit_props["document_global_key"]))
+            document = self.document_by_id.get(unit_props.get("document_id") or "")
+            if document:
+                doc_props = document.get("properties") or {}
+                for field in ("document_key", "document_global_key", "global_key", "canonical_citation", "abbreviation", "title", "short_title"):
+                    if doc_props.get(field):
+                        aliases.add(slugify(doc_props[field]))
+        return aliases
 
     def source_unit_id_for_chunk(self, chunk: Dict[str, Any]) -> str:
         return (chunk.get("properties") or {}).get("unit_id") or ""
@@ -613,23 +644,23 @@ class ReferenceExtractor:
             if self.overlaps(match.start(), match.end(), occupied):
                 continue
             abbr_key = normalize_abbreviation(match.group("abbr"))
-            current_doc = self.document_key_for_chunk(chunk)
-            if abbr_key == current_doc:
+            if abbr_key in self.document_aliases_for_chunk(chunk):
                 continue
+            target_document_key = self.document_alias_to_global_key.get(abbr_key, abbr_key)
             body = match.group("body")
             number, qualifiers = parse_single_para_body(body)
             if not number:
                 continue
-            target_key = global_key_for_para(abbr_key, number, qualifiers)
+            target_key = global_key_for_para(target_document_key, number, qualifiers)
             self.add_reference(
                 chunk,
                 match.group("mention"),
                 offset + match.start(),
                 offset + match.end(),
-                abbr_key,
+                target_document_key,
                 target_key,
                 "external_abbreviation",
-                "{} para {}".format(abbr_key, body),
+                "{} para {}".format(target_document_key, body),
                 target_title_key=None,
             )
             spans.append((match.start(), match.end()))

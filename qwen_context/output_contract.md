@@ -39,7 +39,9 @@ Repräsentiert ein einzelnes Gesetzes-PDF.
 | `title` | string | Gesetzestitel (z.B. "Kriftverordnung") |
 | `full_citation` | string | Vollständige Zitierweise (z.B. "KriftV vom 15.03.2017, BGBl. I S. 478") |
 | `canonical_citation` | string | Kanonische Kurzform (z.B. "KriftV") |
-| `document_key` | string | Maschinenlesbarer Dokument-Key für globale IDs, z.B. `versatzv` |
+| `document_key` | string | Kurzer maschinenlesbarer Dokument-Alias, z.B. `versatzv` |
+| `document_global_key` | string | Normalisierter ausgeschriebener Normname/Kurztitel fuer globale IDs, z.B. `versatzverordnung` |
+| `global_key` | string | Bei Document identisch zu `document_global_key` |
 | `citation_prefix` | string | Zitierpräfix für menschenlesbare Referenzen, z.B. `VersatzV` |
 | `abbreviation` | string | Offizielle Abkürzung, wenn erkannt |
 | `date_enacted` | string | Ausfertigungsdatum (ISO 8601) |
@@ -72,12 +74,13 @@ Repräsentiert eine Hierarchieebene der Normstruktur.
 
 | Feld | Typ | Beschreibung |
 |---|---|---|
-| `unit_id` | string | Stabile, zitiernahe ID: z.B. `unit_versatzv_para_4` |
-| `global_key` | string | Maschinenlesbarer globaler Key ohne Prefix, z.B. `versatzv_para_4` |
+| `unit_id` | string | Stabile, zitiernahe ID: z.B. `unit_versatzverordnung_para_4` |
+| `global_key` | string | Maschinenlesbarer globaler Key ohne Prefix, z.B. `versatzverordnung_para_4` |
 | `legal_citation` | string | Menschlich zitierbarer Name, z.B. `VersatzV § 4` |
 | `display_name` | string | Lesbarer Name inklusive Titel, soweit verfügbar |
 | `document_id` | string | Verweis auf das Document |
 | `document_key` | string | Maschinenlesbarer Dokument-Key |
+| `document_global_key` | string | Globaler Dokument-Key, der den ausgeschriebenen Normnamen/Kurztitel verwendet |
 | `unit_type` | string | Aktuell vor allem: `paragraph`, `annex`, `table`, `waste_code`; später auch `part`, `chapter`, `section` |
 | `label` | string | Beschriftung (z.B. "§ 1", "(1)", "Anlage 1") |
 | `number` | string | Numerierung (z.B. "1", "2a", "3.1") |
@@ -105,7 +108,7 @@ Dient als feingranulare Einheit für Review und spätere Semantik-Extraktion.
 
 | Feld | Typ | Beschreibung |
 |---|---|---|
-| `chunk_id` | string | Stabile, zitiernahe ID: z.B. `chunk_versatzv_para_4_abs_2` oder `chunk_versatzv_anlage_2_tabelle_1_rows_1_10` |
+| `chunk_id` | string | Stabile, zitiernahe ID: z.B. `chunk_versatzverordnung_para_4_abs_2` oder `chunk_versatzverordnung_anlage_2_tabelle_1_rows_1_40` |
 | `global_key` | string | Maschinenlesbarer globaler Key ohne Prefix |
 | `legal_citation` | string | Menschlich zitierbarer Name, z.B. `VersatzV § 4 Abs. 2` oder `VersatzV Anlage 2 Tabelle 1 Zeilen 1-10` |
 | `display_name` | string | Lesbarer Name für UI/Review |
@@ -173,8 +176,8 @@ Entscheidung eines Reviews über eine Einheit oder den gesamten Dokumentenabschn
 
 1. **document_id:** `doc_` + erste 12 Zeichen des SHA256 des PDFs
 2. **page_id:** `page_` + erste 6 Zeichen von document_id + `_` + 3-stellige, null-polierte Seitennummer
-3. **unit_id:** `unit_` + `document_key` + juristischer Pfad, z.B. `unit_versatzv_para_4`
-4. **chunk_id:** `chunk_` + `document_key` + juristischer Pfad, z.B. `chunk_versatzv_para_4_abs_2`; Tabellenchunks erhalten einen Zeilenbereich, z.B. `chunk_versatzv_anlage_2_tabelle_1_rows_1_40`
+3. **unit_id:** `unit_` + `document_global_key` + juristischer Pfad, z.B. `unit_versatzverordnung_para_4`
+4. **chunk_id:** `chunk_` + `document_global_key` + juristischer Pfad, z.B. `chunk_versatzverordnung_para_4_abs_2`; Tabellenchunks erhalten einen Zeilenbereich, z.B. `chunk_versatzverordnung_anlage_2_tabelle_1_rows_1_40`
 5. **issue_id:** `issue_` + erste 6 Zeichen von document_id + `_` + fortlaufende Nummer
 6. **review_id:** `review_` + erste 6 Zeichen von document_id + `_` + fortlaufende Nummer
 

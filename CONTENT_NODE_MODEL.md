@@ -33,6 +33,8 @@ Typische Eigenschaften:
 
 - `document_id`
 - `document_key`
+- `document_global_key`
+- `global_key`
 - `title`
 - `canonical_citation`
 - `full_citation`
@@ -62,6 +64,7 @@ Typische Eigenschaften:
 - `unit_id`
 - `global_key`
 - `document_id`
+- `document_global_key`
 - `unit_type`
 - `legal_citation`
 - `display_name`
@@ -93,6 +96,7 @@ Typische Eigenschaften:
 - `chunk_id`
 - `global_key`
 - `unit_id`
+- `document_global_key`
 - `chunk_type`
 - `legal_citation`
 - `display_name`
@@ -183,6 +187,9 @@ wie `Document`, `StructuralUnit`, `Chunk` und Subtypen gefaerbt werden kann.
 5. Tabellenkopf und Spaltenbeschriftungen muessen in jedem `table_rows`-Chunk
    enthalten sein.
 6. IDs muessen stabil, zitiernah und rebuildbar sein.
-7. Die feinste Content-Ebene fuer Verweisextraktion ist der `Chunk`.
-8. Hoehere Verweisrelationen werden aus der Content-Hierarchie abgeleitet, nicht
+7. `global_key` verwendet den normalisierten ausgeschriebenen Dokumentnamen
+   oder Kurztitel, z.B. `versatzverordnung_para_4`, nicht nur die Abkuerzung.
+8. `document_key` darf als kurzer Alias erhalten bleiben, z.B. `versatzv`.
+9. Die feinste Content-Ebene fuer Verweisextraktion ist der `Chunk`.
+10. Hoehere Verweisrelationen werden aus der Content-Hierarchie abgeleitet, nicht
    separat frei extrahiert, aber im Graphen explizit gespeichert.

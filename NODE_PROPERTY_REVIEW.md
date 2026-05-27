@@ -138,3 +138,8 @@ Fuer den Neo4j-Export koennte man eine schlanke Property-Ansicht einfuehren:
 
 Das reduziert die visuelle Unruhe, ohne die Extraktionsdaten zu verlieren.
 
+## Umsetzungsstand
+
+Der Neo4j-Cypher-Exporter filtert Node-Properties inzwischen label-spezifisch.
+Die Raw-/Content-JSONs bleiben bewusst reichhaltiger; der Neo4j-Graph bekommt
+eine schlankere Ansicht fuer Visualisierung und Retrieval.

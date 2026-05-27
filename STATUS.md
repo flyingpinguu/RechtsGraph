@@ -141,7 +141,9 @@
 
 ### Extractor-Struktur-Upgrade für zitierbare Units/Chunks
 - Improved `pdf-neo4j-pipeline/scripts/extract_normtext.py`.
-  - Structural units now receive readable global IDs and keys, e.g. `unit_versatzv_para_4`, `global_key=versatzv_para_4`.
+  - Structural units received readable global IDs and keys. This was later
+    updated from abbreviation-based keys to long-name keys, e.g.
+    `unit_versatzverordnung_para_4`.
   - Structural units now include `legal_citation`, `display_name`, `document_key`, `title`, and `text_sha256`.
   - Chunks now include `global_key`, `legal_citation`, `display_name`, `chunk_type`, `parent_chunk_id`, `child_chunk_ids`, `label`, `number`, and `sequence`.
   - Paragraph chunks are split into `subsection` chunks where `(1)`, `(2)` etc. exist.
@@ -341,3 +343,12 @@
 - Initialized a local Git repository for the project. Generated outputs and
   virtual environments are ignored; source PDFs, scripts, and documentation are
   versioned.
+- Updated key strategy: `document_key` remains a short alias such as `versatzv`,
+  while `document_global_key`/`global_key` uses the normalized long norm name or
+  short title, e.g. `versatzverordnung`. Unit and chunk keys now follow this
+  form, e.g. `unit_versatzverordnung_para_4`.
+- Updated reference extraction to build internal targets from
+  `document_global_key` and to resolve known abbreviations to imported
+  document-global keys.
+- Updated the Neo4j Cypher exporter to filter node properties by label. Raw and
+  content JSONs stay rich; Neo4j receives a slimmer visualization/RAG view.

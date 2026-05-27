@@ -63,6 +63,10 @@ Das kanonische Modell bleibt flach:
 - Retrieval-Text steht in `chunks`.
 - Hierarchie laeuft ueber `parent_unit_id`, `child_unit_ids`,
   `parent_chunk_id`, `child_chunk_ids`.
+- `global_key` und daraus abgeleitete `unit_id`/`chunk_id` nutzen den
+  normalisierten ausgeschriebenen Normnamen oder Kurztitel, z.B.
+  `versatzverordnung_para_4`.
+- `document_key` bleibt als kurzer Alias erhalten, z.B. `versatzv`.
 
 Tabellen bleiben `table`-Units unter Anlagen. Wenn eine Tabelle mehrere
 Abschnitte hat, z.B. `Tabelle 2` mit `Anorganische Stoffe` und `Organische

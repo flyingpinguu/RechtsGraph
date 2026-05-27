@@ -107,6 +107,8 @@ def document_node(document: Dict[str, Any]) -> Dict[str, Any]:
         [
             "document_id",
             "document_key",
+            "document_global_key",
+            "global_key",
             "title",
             "canonical_citation",
             "citation_prefix",
@@ -120,6 +122,8 @@ def document_node(document: Dict[str, Any]) -> Dict[str, Any]:
     page_refs = document.get("page_refs") or document.get("pages") or []
     props["page_count"] = len(page_refs)
     if document.get("metadata"):
+        if document["metadata"].get("short_title"):
+            props["short_title"] = document["metadata"]["short_title"]
         props["metadata_json"] = json.dumps(document["metadata"], ensure_ascii=False, sort_keys=True)
     return {
         "id": document["document_id"],
@@ -136,6 +140,7 @@ def unit_node(unit: Dict[str, Any]) -> Dict[str, Any]:
             "global_key",
             "document_id",
             "document_key",
+            "document_global_key",
             "unit_type",
             "legal_citation",
             "display_name",
@@ -175,6 +180,7 @@ def chunk_node(chunk: Dict[str, Any]) -> Dict[str, Any]:
             "chunk_id",
             "global_key",
             "unit_id",
+            "document_global_key",
             "chunk_type",
             "legal_citation",
             "display_name",

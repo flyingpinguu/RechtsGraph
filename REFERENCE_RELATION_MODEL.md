@@ -28,6 +28,7 @@ Eingabe ist der Content Graph JSON, insbesondere:
 - `Chunk.legal_citation`
 - `StructuralUnit.global_key`
 - `Document.document_key`
+- `Document.document_global_key`
 - `Document.title`
 - `Document.canonical_citation`
 
@@ -46,12 +47,14 @@ entgegen § 3 oder § 4 Abs. 1 Satz 1
 Anlage 2 Tabelle 1a
 ```
 
-Zielschluessel werden aus dem aktuellen `document_key` gebildet:
+Zielschluessel werden aus dem aktuellen `document_global_key` gebildet. Dieser
+Key basiert auf dem normalisierten ausgeschriebenen Normnamen oder Kurztitel,
+damit er dieselbe Form hat wie externe Langnamenverweise.
 
 ```text
-versatzv_para_3
-versatzv_para_4_abs_1_satz_1
-versatzv_anlage_2_tabelle_1a
+versatzverordnung_para_3
+versatzverordnung_para_4_abs_1_satz_1
+versatzverordnung_anlage_2_tabelle_1a
 ```
 
 Wenn ein Ziel im aktuellen Content Graph existiert, wird die Referenz als
@@ -111,9 +114,10 @@ nachwv_para_28
 altfahrzeugv_para_2_abs_2
 ```
 
-Wenn eine Abkuerzung bereits als `Document.canonical_citation` oder
-`Document.abbreviation` im Content Graph bekannt ist, kann der Resolver sie
-direkt auf das importierte Dokument mappen.
+Wenn eine Abkuerzung bereits als `Document.document_key`,
+`Document.canonical_citation` oder `Document.abbreviation` im Content Graph
+bekannt ist, mappt der Resolver sie auf den `document_global_key` des
+importierten Dokuments.
 
 ## Zielobjekte
 
@@ -172,14 +176,17 @@ blind annehmen, dass ein Langname schon dem internen `document_key` entspricht.
 Deshalb gilt:
 
 1. Der ausgeschriebene Normname erzeugt einen stabilen `title_key`.
-2. Der importierte Content Graph kann einen anderen `document_key` haben.
-3. Ein Resolver verbindet spaeter `title_key`, Abkuerzung und `document_key`.
+2. Der importierte Content Graph kann zusaetzlich einen kurzen `document_key`
+   haben.
+3. Ein Resolver verbindet `title_key`, Abkuerzung und `document_key` mit dem
+   `document_global_key`.
 
 Beispiel:
 
 ```text
 title_key: kreislaufwirtschaftsgesetz
 document_key: krwg
+document_global_key: kreislaufwirtschaftsgesetz
 canonical_citation: KrWG
 ```
 

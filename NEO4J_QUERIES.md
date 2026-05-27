@@ -60,14 +60,14 @@ RETURN p;
 Beispiel fuer `VersatzV § 4`.
 
 ```cypher
-MATCH p=(u:StructuralUnit {global_key: 'versatzv_para_4'})-[:CONTAINS_CHUNK]->(c:Chunk)
+MATCH p=(u:StructuralUnit {global_key: 'versatzverordnung_para_4'})-[:CONTAINS_CHUNK]->(c:Chunk)
 RETURN p;
 ```
 
 ## Chunk-Reihenfolge Einer Unit
 
 ```cypher
-MATCH (u:StructuralUnit {global_key: 'versatzv_para_4'})-[:CONTAINS_CHUNK]->(c:Chunk)
+MATCH (u:StructuralUnit {global_key: 'versatzverordnung_para_4'})-[:CONTAINS_CHUNK]->(c:Chunk)
 OPTIONAL MATCH p=(c)-[:NEXT_CHUNK]->(:Chunk)
 RETURN p;
 ```
@@ -124,7 +124,7 @@ LIMIT 300;
 Beispiel: alle direkten Referenzen von `VersatzV § 4`.
 
 ```cypher
-MATCH p=(u:StructuralUnit {global_key: 'versatzv_para_4'})-[:REFERS_TO]->(target)
+MATCH p=(u:StructuralUnit {global_key: 'versatzverordnung_para_4'})-[:REFERS_TO]->(target)
 RETURN p;
 ```
 
@@ -133,7 +133,7 @@ RETURN p;
 Beispiel: Referenzen aus allen Chunks von `VersatzV § 4`.
 
 ```cypher
-MATCH (u:StructuralUnit {global_key: 'versatzv_para_4'})-[:CONTAINS_CHUNK]->(c:Chunk)
+MATCH (u:StructuralUnit {global_key: 'versatzverordnung_para_4'})-[:CONTAINS_CHUNK]->(c:Chunk)
 MATCH p=(c)-[:REFERS_TO]->(target)
 RETURN p;
 ```
@@ -143,7 +143,7 @@ RETURN p;
 Beispiel: wer verweist auf `VersatzV § 4`.
 
 ```cypher
-MATCH p=(source)-[:REFERS_TO]->(u:StructuralUnit {global_key: 'versatzv_para_4'})
+MATCH p=(source)-[:REFERS_TO]->(u:StructuralUnit {global_key: 'versatzverordnung_para_4'})
 RETURN p;
 ```
 
@@ -184,7 +184,7 @@ RETURN p;
 ## Text Eines Chunks Anzeigen
 
 ```cypher
-MATCH (c:Chunk {global_key: 'versatzv_para_4_abs_1'})
+MATCH (c:Chunk {global_key: 'versatzverordnung_para_4_abs_1'})
 RETURN c.global_key, c.display_name, c.chunk_type, c.text;
 ```
 
