@@ -50,7 +50,8 @@ SUBSECTION_RE = re.compile(r"\((\d+)\)\s")
 LIST_ITEM_RE = re.compile(r"^\s*((?:\d+[a-z]?|[a-z])[\.)])\s+(.+)$")
 AVV_WASTE_RE = re.compile(r"^(\d{2}\s\d{2}(?:\s\d{2})?\*?)\s+(.+)$")
 PAGE_HEADER_RE = re.compile(
-    r"^(?:Ein Service des Bundesministeriums der Justiz sowie des Bundesamts für|"
+    r"^(?:Ein Service des Bundesministeriums der Justiz.*gesetze-im-internet\.de|"
+    r"Ein Service des Bundesministeriums der Justiz sowie des Bundesamts für|"
     r"Justiz\s+.+www\.gesetze-im-internet\.de|"
     r"-\s*Seite\s+\d+\s+von\s+\d+\s*-)$"
 )
@@ -551,7 +552,7 @@ def split_annex_into_chunks(annex):
 
     chunks = []
     current = None
-    heading_re = re.compile(r"^(Tabelle\s+\d+[a-z]?|(?:\d+(?:\.\d+)+)\s+.+|Anhang\s+\d+.*)$")
+    heading_re = re.compile(r"^(Tabelle\s+\d+[a-z]?\s*:?.*|(?:\d+(?:\.\d+)+)\s+.+|Anhang\s+\d+.*)$")
     for line, page_idx in zip(annex_lines, annex_line_pages):
         stripped = line.strip()
         match = heading_re.match(stripped)
@@ -812,6 +813,11 @@ def parse_table_block(table_text, line_pages=None):
 
     label = lines[0]
     title_lines = []
+    heading_match = re.match(r"^(Tabelle\s+\d+[a-z]?|Anhang\s+\d+)\s*:?\s*(.*)$", label)
+    if heading_match:
+        label = heading_match.group(1)
+        if heading_match.group(2).strip():
+            title_lines.append(heading_match.group(2).strip())
     header_index = None
     header_keywords = ("Konzentration", "Verfahrenshinweise", "Parameter", "Norm", "Ausgabe")
     for idx, line in enumerate(lines[1:], start=1):

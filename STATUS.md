@@ -388,3 +388,38 @@
     nodes.
 - Regression: re-ran VersatzV. Counts remained stable at 83 nodes and 242
   relationships with no duplicate IDs.
+
+### Reference-Debugging ErsatzbaustoffV
+- User finding checked: `ersatzbaustoffverordnung_para_25_abs_3` looked like a
+  source of very many references in Neo4j, although its text contains only a few
+  Anlage references.
+- Root cause 1: broad targets such as `Anlage 8` were expanded from one
+  StructuralUnit target to every direct chunk below that unit. Fixed by linking
+  chunk-level references to one representative target chunk and preserving the
+  exact broad relation on StructuralUnit level.
+- Root cause 2: the Anlage-reference regex could cross a line/list boundary,
+  so text like `Anlage 2 oder 3` followed by list item `8.` could be misread as
+  `Anlage 2 oder 3 und 8`. Fixed by allowing connector continuations only over
+  horizontal whitespace.
+- Root cause 3: plural `Nummern` could be parsed as `Nummer n`. Fixed by
+  treating `Nummer`/`Nummern` as one qualifier family.
+- Root cause 4: internal table targets were previously unresolved when the
+  table structure was missing. The table heading detector now recognizes
+  headings with inline titles such as `Tabelle 2: ...`, producing table units
+  with keys like `ersatzbaustoffverordnung_anlage_4_tabelle_2`.
+- Re-ran ErsatzbaustoffV end-to-end:
+  - Content graph: 550 nodes, 1011 hierarchy/sequence relationships.
+  - Reference graph: 625 nodes, 1625 relationships.
+  - StructuralUnits include 46 `table` units.
+  - `REFERS_TO`: 614.
+  - `ersatzbaustoffverordnung_para_25_abs_3` now has 7 outgoing chunk-level
+    references: `Anlage 8` once and `Anlage 2 oder 3` three times, split to
+    Anlage 2 and Anlage 3.
+  - Checked bad patterns: no `_nr_n` targets, no false `anlage_10`, no false
+    `Anlage 2 oder 3 und ...` references, no self-document ReferenceTarget for
+    `ersatzbaustoffverordnung`.
+- Re-ran VersatzV regression after the extractor/reference changes:
+  - Reference graph: 83 nodes, 193 relationships.
+  - StructuralUnits include 5 `table` units.
+  - `REFERS_TO`: 62.
+  - Reference level validation: 0 invalid level mappings.

@@ -163,9 +163,21 @@ Abgeleitete Ebenen:
 ```
 
 Bei intern aufloesbaren Zielen werden Chunk-Referenzen bevorzugt auf vorhandene
-Chunk-Nodes gelegt. Wenn ein Ziel nur feiner zitiert ist als die vorhandene
-Struktur, z.B. `Satz 1`, kann zusaetzlich ein `ReferenceTarget` den exakten
-Zielschluessel halten.
+Chunk-Nodes gelegt. Wenn ein Ziel eine breite StructuralUnit ist, z.B.
+`Anlage 8`, zeigt die Chunk-Relation nur auf einen repraesentativen Chunk
+dieser Einheit. Sonst wuerde ein einzelner Verweis auf eine ganze Anlage auf
+alle Tabellen- oder Abschnitts-Chunks der Anlage auffaechern. Die breite
+Relation selbst bleibt ueber den StructuralUnit-Rollup erhalten.
+
+Wenn ein Ziel feiner zitiert ist als die vorhandene Struktur, z.B. `Satz 1`
+oder eine nicht modellierte Nummer, kann ein `ReferenceTarget` den exakten
+Zielschluessel halten. `nearest_resolved_target_id` zeigt dann auf die
+naechsthoeher vorhandene Ebene.
+
+Tabellenverweise wie `Anlage 4 Tabelle 2` werden nur dann voll aufgeloest,
+wenn die Normtext-Extraktion fuer diese Anlage echte `table`-StructuralUnits
+mit Keys wie `..._anlage_4_tabelle_2` erzeugt. Andernfalls fallen sie auf die
+naechsthoeher vorhandene Anlage zurueck.
 
 ## Eindeutigkeit
 

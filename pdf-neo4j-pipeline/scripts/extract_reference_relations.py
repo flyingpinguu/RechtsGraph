@@ -25,43 +25,46 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 SCHEMA_VERSION = "0.1.0"
+HSPACE = r"[^\S\r\n]"
+QUALIFIER_PATTERN = r"(?:Abs\.|Absatz|Satz|Nummern?|Nr\.|Buchstabe|Buchst\.)"
 
 PARA_EXTERNAL_LONG_RE = re.compile(
     r"(?P<mention>§{1,2}\s*(?P<body>\d+[a-z]?"
-    r"(?:\s*(?:Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.)\s*[A-Za-z0-9]+)*"
+    rf"(?:\s*{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+)*"
     r"(?:\s*(?:und|oder|,|-|bis)\s*\d+[a-z]?){0,8})"
     r"\s+(?P<article>des|der)\s+(?P<law>[A-ZÄÖÜ][A-Za-zÄÖÜäöüß0-9\-– ]{3,100}?"
     r"(?:gesetzes|verordnung|ordnung|gesetzbuches)))"
 )
 ARTICLE_EXTERNAL_LONG_RE = re.compile(
     r"(?P<mention>Artikel\s+(?P<body>\d+[a-z]?"
-    r"(?:\s*(?:Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.)\s*[A-Za-z0-9]+)*)"
+    rf"(?:\s*{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+)*)"
     r"\s+(?P<article>des|der)\s+(?P<law>[A-ZÄÖÜ][A-Za-zÄÖÜäöüß0-9\-– ]{3,100}?"
     r"(?:gesetzes|verordnung|ordnung|gesetzbuches)))"
 )
 PARA_EXTERNAL_ABBREV_RE = re.compile(
     r"(?P<mention>§{1,2}\s*(?P<body>\d+[a-z]?"
-    r"(?:\s*(?:Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.)\s*[A-Za-z0-9]+)*"
+    rf"(?:\s*{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+)*"
     r"(?:\s*(?:und|oder|,|-|bis)\s*\d+[a-z]?){0,8})"
     r"\s+(?P<abbr>[A-ZÄÖÜ][A-Za-zÄÖÜa-zäöüß0-9]{1,20}(?:G|V|GB|BGB|StGB|VZO))\b)"
 )
 INTERNAL_PARA_RE = re.compile(
     r"(?P<mention>§{1,2}\s*(?P<body>\d+[a-z]?"
-    r"(?:\s*(?:Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.)\s*[A-Za-z0-9]+)*"
+    rf"(?:\s*{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+)*"
     r"(?:\s*(?:und|oder|,|-|bis)\s*\d+[a-z]?){0,8}))"
 )
 CONTEXTUAL_SUBSECTION_RE = re.compile(
     r"(?P<mention>\b(?:Abs\.|Absatz)\s+(?P<num>\d+[a-z]?)\b)"
 )
 INTERNAL_ANNEX_RE = re.compile(
-    r"(?P<mention>\bAnlagen?\s+(?P<body>\d+[a-z]?"
-    r"(?:\s*(?:und|oder|,|-|bis)\s*\d+[a-z]?){0,8})"
-    r"(?:\s+Tabelle\s+(?P<table_body>\d+[a-z]?"
-    r"(?:\s*(?:und|oder|,|-|bis)\s*(?:Tabelle\s+)?\d+[a-z]?){0,8}))?)"
+    rf"(?P<mention>\bAnlagen?\s+(?P<body>\d+[a-z]?"
+    rf"(?:{HSPACE}*(?:und|oder|,|-|bis){HSPACE}*\d+[a-z]?)*"
+    rf")"
+    rf"(?:\s+Tabelle\s+(?P<table_body>\d+[a-z]?"
+    rf"(?:{HSPACE}*(?:und|oder|,|-|bis){HSPACE}*(?:Tabelle{HSPACE}+)?\d+[a-z]?)*))?)"
 )
 
 QUALIFIER_RE = re.compile(
-    r"\b(?P<kind>Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.)\s*(?P<num>[A-Za-z0-9]+)"
+    r"\b(?P<kind>Abs\.|Absatz\b|Satz\b|Nummern?\b|Nr\.|Buchstabe\b|Buchst\.)\s*(?P<num>[A-Za-z0-9]+)"
 )
 MULTI_NUM_RE = re.compile(r"\d+[a-z]?")
 
@@ -125,7 +128,7 @@ def token_for_qualifier(kind: str) -> str:
         return "abs"
     if normalized == "satz":
         return "satz"
-    if normalized == "nummer" or normalized == "nr":
+    if normalized in ("nummer", "nummern", "nr"):
         return "nr"
     if normalized == "buchstabe" or normalized == "buchst":
         return "buchst"
@@ -191,7 +194,7 @@ def target_level_from_global_key(global_key: str) -> str:
 
 def strip_to_nearest_keys(global_key: str) -> Iterable[str]:
     parts = global_key.split("_")
-    cut_markers = ("buchst", "nr", "satz", "abs")
+    cut_markers = ("buchst", "nr", "satz", "abs", "tabelle")
     while True:
         found = False
         for marker in cut_markers:
@@ -391,15 +394,35 @@ class ReferenceExtractor:
             return node_id
         return self.document_id_for_unit(self.unit_id_for_node(node_id))
 
+    def document_id_for_key(self, key: Optional[str]) -> Optional[str]:
+        if not key:
+            return None
+        node_id = self.global_to_node_id.get(key) or self.global_to_node_id.get(slugify(key))
+        if node_id in self.document_by_id:
+            return node_id
+        return None
+
+    def representative_chunk_id_for_unit(self, unit_id: str) -> Optional[str]:
+        chunks = [
+            chunk
+            for chunk in self.chunks_by_unit_id.get(unit_id, [])
+            if not (chunk.get("properties") or {}).get("parent_chunk_id")
+        ]
+        if not chunks:
+            return None
+        preferred_types = ("paragraph_text", "annex_text", "waste_code_entry", "table_rows")
+        for preferred_type in preferred_types:
+            for chunk in chunks:
+                if (chunk.get("properties") or {}).get("chunk_type") == preferred_type:
+                    return chunk["id"]
+        return chunks[0]["id"]
+
     def target_chunk_ids_for_node(self, node_id: str) -> List[str]:
         if node_id in self.chunk_by_id:
             return [node_id]
         if node_id in self.unit_by_id:
-            return [
-                chunk["id"]
-                for chunk in self.chunks_by_unit_id.get(node_id, [])
-                if not (chunk.get("properties") or {}).get("parent_chunk_id")
-            ]
+            representative_id = self.representative_chunk_id_for_unit(node_id)
+            return [representative_id] if representative_id else []
         return [node_id]
 
     def target_unit_id_for_reference(self, target_id: str, nearest_id: Optional[str]) -> Optional[str]:
@@ -509,8 +532,9 @@ class ReferenceExtractor:
         source_document_id = self.source_document_id_for_chunk(source_chunk)
 
         # Chunk level: prefer Chunk -> Chunk. When a target is only represented
-        # as a StructuralUnit, link to its direct chunks. Unresolved external
-        # targets necessarily remain Chunk -> ReferenceTarget.
+        # as a broad StructuralUnit, link to one representative chunk; otherwise
+        # references such as "Anlage 8" explode into dozens of parallel edges.
+        # The exact broad target is still preserved by the unit-level rollup.
         chunk_targets = self.target_chunk_ids_for_node(target_id)
         for chunk_target_id in chunk_targets:
             if chunk_target_id == source_chunk_id:
@@ -529,7 +553,11 @@ class ReferenceExtractor:
         # Document level: connect documents when the target document is known.
         # For unknown external documents, create/use a document-level
         # ReferenceTarget keyed by the normalized title/abbreviation.
-        target_document_id = self.document_id_for_node(target_id) or self.document_id_for_node(nearest_id)
+        target_document_id = (
+            self.document_id_for_node(target_id)
+            or self.document_id_for_node(nearest_id)
+            or self.document_id_for_key(props.get("target_document_key"))
+        )
         document_target_id = target_document_id
         if not document_target_id and props.get("target_document_key"):
             document_target_id = "ref_target_{}".format(slugify(props["target_document_key"]))
