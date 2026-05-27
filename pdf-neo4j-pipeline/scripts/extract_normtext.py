@@ -33,6 +33,19 @@ except ImportError:  # pragma: no cover - optional local dependency
 # ---------------------------------------------------------------------------
 PARA_RE = re.compile(r"^(\u00a7\s*\d+[a-z]?)(?:\s+(.+))?$")
 ANNEX_RE = re.compile(r"^(Anlage\s+\d+[a-z]?)(?:\s+(.+))?$")
+SECTION_RE = re.compile(r"^(?:Abschnitt|A\s*b\s*s\s*c\s*h\s*n\s*i\s*t\s*t)\s+\d+", re.IGNORECASE)
+SUBSECTION_GROUP_RE = re.compile(
+    r"^(?:Unterabschnitt|U\s*n\s*t\s*e\s*r\s*a\s*b\s*s\s*c\s*h\s*n\s*i\s*t\s*t)\s+\d+",
+    re.IGNORECASE,
+)
+PARA_REFERENCE_TAIL_RE = re.compile(
+    r"^(?:Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.|§|und|oder|,)",
+    re.IGNORECASE,
+)
+ANNEX_REFERENCE_TAIL_RE = re.compile(
+    r"^(?:Tabelle|Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.|und|oder|sowie|,)\b",
+    re.IGNORECASE,
+)
 SUBSECTION_RE = re.compile(r"\((\d+)\)\s")
 LIST_ITEM_RE = re.compile(r"^\s*((?:\d+[a-z]?|[a-z])[\.)])\s+(.+)$")
 AVV_WASTE_RE = re.compile(r"^(\d{2}\s\d{2}(?:\s\d{2})?\*?)\s+(.+)$")
@@ -240,8 +253,100 @@ def normalize_page_lines(page_text):
     return normalized
 
 
+def clean_line(line):
+    return (line or "").replace("\x00", "").strip()
+
+
+def match_para_heading(stripped):
+    match = PARA_RE.match(stripped)
+    if not match:
+        return None
+    tail = (match.group(2) or "").strip()
+    if tail and PARA_REFERENCE_TAIL_RE.match(tail):
+        return None
+    return match
+
+
+def match_annex_heading(stripped):
+    match = ANNEX_RE.match(stripped)
+    if not match:
+        return None
+    tail = (match.group(2) or "").strip()
+    if tail and ANNEX_REFERENCE_TAIL_RE.match(tail):
+        return None
+    if tail and tail[0].islower() and not tail.startswith("zu "):
+        return None
+    return match
+
+
+def is_section_listing_line(stripped):
+    return bool(SECTION_RE.match(stripped) or SUBSECTION_GROUP_RE.match(stripped))
+
+
+def is_structure_listing_line(stripped):
+    return bool(match_para_heading(stripped) or match_annex_heading(stripped) or is_section_listing_line(stripped))
+
+
+def document_line_stream(page_text_map):
+    stream = []
+    for page_idx in sorted(page_text_map):
+        for line in normalize_page_lines(page_text_map[page_idx]):
+            stream.append((page_idx, line))
+    return stream
+
+
+def next_significant_lines(stream, index, limit=4):
+    lines = []
+    for _page_idx, line in stream[index + 1:]:
+        stripped = clean_line(line)
+        if not stripped:
+            continue
+        lines.append(stripped)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def looks_like_real_unit_start(stream, index):
+    stripped = clean_line(stream[index][1])
+    if not (match_para_heading(stripped) or match_annex_heading(stripped)):
+        return False
+    lookahead = next_significant_lines(stream, index)
+    if not lookahead:
+        return False
+    if is_structure_listing_line(lookahead[0]):
+        return False
+    if len(lookahead) > 1 and is_structure_listing_line(lookahead[1]):
+        return False
+    for line in lookahead:
+        if is_structure_listing_line(line):
+            return False
+        if SUBSECTION_RE.search(line):
+            return True
+    return True
+
+
+def filtered_document_lines(page_text_map):
+    """Return document lines with the table of contents removed."""
+    stream = document_line_stream(page_text_map)
+    filtered = []
+    in_toc = False
+    for index, (page_idx, line) in enumerate(stream):
+        stripped = clean_line(line)
+        if stripped.startswith("Inhaltsübersicht") or stripped.startswith("Inhaltsuebersicht"):
+            in_toc = True
+            continue
+        if in_toc:
+            if looks_like_real_unit_start(stream, index):
+                in_toc = False
+                filtered.append((page_idx, line))
+            continue
+        filtered.append((page_idx, line))
+    return filtered
+
+
 def is_top_level_structure_heading(stripped):
-    return PARA_RE.match(stripped) or ANNEX_RE.match(stripped)
+    return match_para_heading(stripped) or match_annex_heading(stripped)
 
 
 def detect_paras_across_pages(page_text_map):
@@ -253,34 +358,37 @@ def detect_paras_across_pages(page_text_map):
     """
     results = []
     current = None
+    in_annexes = False
 
-    for page_idx in sorted(page_text_map):
-        for line in normalize_page_lines(page_text_map[page_idx]):
-            stripped = line.strip()
-            m = PARA_RE.match(stripped)
-            if m:
-                if current is not None:
-                    current["text"] = "\n".join(current["lines"]).strip()
-                    results.append(current)
-                current = {
-                    "start_page": page_idx,
-                    "end_page": page_idx,
-                    "label": m.group(1).strip(),
-                    "title": (m.group(2) or "").strip() or None,
-                    "lines": [line],
-                }
-                continue
-
-            if ANNEX_RE.match(stripped):
-                if current is not None:
-                    current["text"] = "\n".join(current["lines"]).strip()
-                    results.append(current)
-                    current = None
-                continue
-
+    for page_idx, line in filtered_document_lines(page_text_map):
+        stripped = clean_line(line)
+        if match_annex_heading(stripped):
             if current is not None:
-                current["lines"].append(line)
-                current["end_page"] = page_idx
+                current["text"] = "\n".join(current["lines"]).strip()
+                results.append(current)
+                current = None
+            in_annexes = True
+            continue
+        if in_annexes:
+            continue
+
+        m = match_para_heading(stripped)
+        if m:
+            if current is not None:
+                current["text"] = "\n".join(current["lines"]).strip()
+                results.append(current)
+            current = {
+                "start_page": page_idx,
+                "end_page": page_idx,
+                "label": m.group(1).strip(),
+                "title": (m.group(2) or "").strip() or None,
+                "lines": [line],
+            }
+            continue
+
+        if current is not None:
+            current["lines"].append(line)
+            current["end_page"] = page_idx
 
     if current is not None:
         current["text"] = "\n".join(current["lines"]).strip()
@@ -294,28 +402,27 @@ def detect_annexes_across_pages(page_text_map):
     results = []
     current = None
 
-    for page_idx in sorted(page_text_map):
-        for line in normalize_page_lines(page_text_map[page_idx]):
-            stripped = line.strip()
-            m = ANNEX_RE.match(stripped)
-            if m:
-                if current is not None:
-                    current["text"] = "\n".join(current["lines"]).strip()
-                    results.append(current)
-                current = {
-                    "start_page": page_idx,
-                    "end_page": page_idx,
-                    "label": m.group(1).strip(),
-                    "title": (m.group(2) or "").strip() or None,
-                    "lines": [line],
-                    "line_pages": [page_idx],
-                }
-                continue
-
+    for page_idx, line in filtered_document_lines(page_text_map):
+        stripped = clean_line(line)
+        m = match_annex_heading(stripped)
+        if m:
             if current is not None:
-                current["lines"].append(line)
-                current["line_pages"].append(page_idx)
-                current["end_page"] = page_idx
+                current["text"] = "\n".join(current["lines"]).strip()
+                results.append(current)
+            current = {
+                "start_page": page_idx,
+                "end_page": page_idx,
+                "label": m.group(1).strip(),
+                "title": (m.group(2) or "").strip() or None,
+                "lines": [line],
+                "line_pages": [page_idx],
+            }
+            continue
+
+        if current is not None:
+            current["lines"].append(line)
+            current["line_pages"].append(page_idx)
+            current["end_page"] = page_idx
 
     if current is not None:
         current["text"] = "\n".join(current["lines"]).strip()

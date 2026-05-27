@@ -370,3 +370,21 @@
   as real paragraph/annex units, producing duplicate node IDs in the generated
   JSON. Neo4j merges these duplicates during import, but extractor-side TOC
   filtering must be improved before scaling this document type.
+- Fixed the first TOC false-positive class in `extract_normtext.py`.
+  - Added a document-line filter that skips `Inhaltsübersicht` until the first
+    heading followed by real body text.
+  - Tightened paragraph heading detection so lines like `§ 5 Absatz 2, § 6 ...`
+    are treated as references, not new paragraph units.
+  - Tightened annex heading detection so line starts like `Anlage 2 oder 3 ...`
+    and `Anlage 7 auszustellen ...` are treated as body/reference text.
+  - Paragraph detection now stops after the first real annex heading.
+- Re-ran ErsatzbaustoffV after the fix:
+  - JSON/Cypher has 306 nodes and 1398 relationships.
+  - Duplicate node IDs: 0.
+  - Duplicate relationship IDs: 0.
+  - Neo4j import completed after clearing the test database.
+  - Neo4j verification: 306 nodes, 1398 relationships, 994 `REFERS_TO`, 0
+    `Chunk -> StructuralUnit` `REFERS_TO`, 0 old `ersatzbaustoffv_*` prefix
+    nodes.
+- Regression: re-ran VersatzV. Counts remained stable at 83 nodes and 242
+  relationships with no duplicate IDs.
