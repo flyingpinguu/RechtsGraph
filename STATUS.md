@@ -352,3 +352,21 @@
   document-global keys.
 - Updated the Neo4j Cypher exporter to filter node properties by label. Raw and
   content JSONs stay rich; Neo4j receives a slimmer visualization/RAG view.
+
+### ErsatzbaustoffV Strukturtest
+- Ran the current pipeline on `abfall_pdfs/06_ErsatzbaustoffV.pdf`.
+- Generated artifacts under ignored `pdf-neo4j-pipeline/output/`:
+  - `raw_ersatzbaustoffv_current.json`
+  - `content_nodes/ersatzbaustoffv_content_graph.json`
+  - `content_nodes/ersatzbaustoffv_content_graph_with_refs.json`
+  - `neo4j/ersatzbaustoffv_import_with_refs.cypher`
+- Imported the ErsatzbaustoffV graph into the local Neo4j test database after
+  clearing the previous import.
+- Neo4j counts after import: 320 nodes, 1399 relationships.
+- Important finding: the current extractor does not yet model `Abschnitt` and
+  `Unterabschnitt` as separate StructuralUnits. It still emits only paragraph,
+  annex, table/waste-code style units plus chunks.
+- Important finding: the ErsatzbaustoffV table of contents is partially parsed
+  as real paragraph/annex units, producing duplicate node IDs in the generated
+  JSON. Neo4j merges these duplicates during import, but extractor-side TOC
+  filtering must be improved before scaling this document type.
