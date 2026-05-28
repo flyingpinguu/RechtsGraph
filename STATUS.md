@@ -516,3 +516,25 @@
     `paragraph_text`, 2 `waste_code_entry`.
 - Regression run for VersatzV:
   - Still 3 `table_rows`, 4 `annex_text`, 7 `subsection`, 5 `paragraph_text`.
+
+### Geometric Parsing for Wide Material Tables
+- Added a PyMuPDF word-coordinate parser for wide material-value tables.
+  - Applies when a detected table title contains `Materialwerte`.
+  - Uses visible column header positions instead of line-text splitting.
+  - Stores parsed rows as dictionaries keyed by column name where possible.
+- Re-ran ErsatzbaustoffV after the change.
+  - Anlage 1 Tabelle 1: 36 parsed row dictionaries; columns include `RC-1`
+    through `GKOS` and continuation columns `CUM-1` through `HMVA-2`.
+  - Anlage 1 Tabelle 2: 11 parsed row dictionaries; columns `GS-0` through
+    `GS-3`.
+  - Anlage 1 Tabelle 4: 37 parsed row dictionaries; columns combine paired
+    material classes such as `BM-F0*, BG-F0*`.
+  - Anlage 1 Tabelle 3 is also parsed geometrically, but remains the most
+    delicate case because its multi-line soil-class headers and dense values
+    are harder to reconstruct perfectly from PDF word positions.
+- Rebuilt content graph, reference graph, Cypher export, and imported the new
+  ErsatzbaustoffV graph into local Neo4j.
+  - Neo4j count: 287 nodes, 1123 relationships.
+- Regression run for VersatzV:
+  - Counts unchanged: 3 `table_rows`, 4 `annex_text`, 7 `subsection`, 5
+    `paragraph_text`.

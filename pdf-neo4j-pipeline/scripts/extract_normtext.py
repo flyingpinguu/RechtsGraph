@@ -158,6 +158,16 @@ def extract_fitz_page_texts(path):
     return texts
 
 
+def extract_fitz_page_words(path):
+    if fitz is None:
+        return []
+    word_pages = []
+    with fitz.open(path) as doc:
+        for page in doc:
+            word_pages.append(page.get_text("words") or [])
+    return word_pages
+
+
 def normalize_for_compare(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
@@ -834,6 +844,327 @@ def split_row_into_cells(row_str, num_columns):
     return [row_str]
 
 
+def group_positioned_words_into_rows(words, y_tolerance=7.0):
+    rows = []
+    current = []
+    current_y = None
+    for word in sorted(words, key=lambda w: (w[1], w[0])):
+        x0, y0, x1, y1, text = word[:5]
+        if current_y is None or abs(y0 - current_y) <= y_tolerance:
+            current.append(word)
+            current_y = y0 if current_y is None else (current_y + y0) / 2
+            continue
+        rows.append(sorted(current, key=lambda w: w[0]))
+        current = [word]
+        current_y = y0
+    if current:
+        rows.append(sorted(current, key=lambda w: w[0]))
+    return rows
+
+
+def positioned_row_text(row):
+    return normalize_for_compare(" ".join(word[4] for word in row))
+
+
+def is_material_class_header_row(row):
+    text = positioned_row_text(row)
+    class_markers = (
+        "RC-",
+        "HOS-",
+        "SWS-",
+        "CUM-",
+        "HMVA-",
+        "BM-",
+        "BG-",
+        "GS-",
+        "SKG",
+        "SKA",
+        "SFA",
+        "BFA",
+        "GKOS",
+        "GRS",
+    )
+    return text.startswith(("MEB ", "BM ", "BG ", "GS ")) and sum(1 for marker in class_markers if marker in text) >= 2
+
+
+def row_contains_parameter_dim(row):
+    text = positioned_row_text(row)
+    return "Parameter" in text and re.search(r"\b(?:Dim\.?|Dimension)\b", text)
+
+
+def row_dim_center(row):
+    dim_word = next((word for word in row if word[4].startswith(("Dim", "Dimension"))), None)
+    if dim_word is None:
+        return None
+    return (dim_word[0] + dim_word[2]) / 2
+
+
+def is_material_header_continuation(row, dim_center):
+    if dim_center is None or not row:
+        return False
+    if any((word[0] + word[2]) / 2 <= dim_center + 8 for word in row):
+        return False
+    text = positioned_row_text(row)
+    return any(marker in text for marker in ("BG-", "BM-", "GS-", "RC-", "SWS-", "HOS-", "HMVA-"))
+
+
+def material_header_columns(header_row, parameter_dim_row=None, continuation_row=None):
+    dim_row = parameter_dim_row or header_row
+    parameter_word = next((word for word in dim_row if word[4].startswith("Parameter")), None)
+    dim_word = next((word for word in dim_row if word[4].startswith(("Dim", "Dimension"))), None)
+    if parameter_word is None or dim_word is None:
+        return None
+    dim_center = (dim_word[0] + dim_word[2]) / 2
+    material_header_words = [
+        word for word in header_row
+        if (word[0] + word[2]) / 2 > dim_center + 8
+    ]
+    if len(material_header_words) < 3:
+        return None
+    material_columns = [word[4] for word in material_header_words]
+    if continuation_row:
+        continuation_words = list(continuation_row)
+        combined_columns = []
+        for word, column in zip(material_header_words, material_columns):
+            center = (word[0] + word[2]) / 2
+            closest = min(
+                continuation_words,
+                key=lambda candidate: abs(((candidate[0] + candidate[2]) / 2) - center),
+                default=None,
+            )
+            if closest is not None and abs(((closest[0] + closest[2]) / 2) - center) <= 14:
+                combined_columns.append("{} {}".format(column, closest[4]).strip())
+            else:
+                combined_columns.append(column)
+        material_columns = combined_columns
+    columns = ["Parameter", "Dim."] + material_columns
+    centers = [
+        (parameter_word[0] + parameter_word[2]) / 2,
+        dim_center,
+    ] + [
+        (word[0] + word[2]) / 2 for word in material_header_words
+    ]
+    return columns, centers
+
+
+def material_table_stop_row(row):
+    text = positioned_row_text(row)
+    if not text:
+        return True
+    if PAGE_HEADER_RE.match(text):
+        return True
+    if re.match(r"^(?:Fortsetzung\s+)?Tabelle\s+\d+[a-z]?:", text):
+        return True
+    if re.match(r"^\d+\s+", text) and any(marker in text for marker in ("Nur ", "Stoffspezifischer", "PAK", "In Gebieten")):
+        return True
+    return False
+
+
+def material_table_row_to_cells(row, boundaries):
+    cells = [[] for _ in range(len(boundaries) - 1)]
+    for word in row:
+        x0, _y0, x1, _y1, text = word[:5]
+        center = (x0 + x1) / 2
+        for idx in range(len(boundaries) - 1):
+            if boundaries[idx] <= center < boundaries[idx + 1]:
+                cells[idx].append(text)
+                break
+    return [normalize_for_compare(" ".join(cell)) for cell in cells]
+
+
+def append_material_cells(target, cells):
+    for idx, cell in enumerate(cells):
+        if not cell:
+            continue
+        target[idx] = normalize_for_compare("{} {}".format(target[idx], cell))
+
+
+def material_cells_to_row(columns, cells):
+    row = {}
+    for column, cell in zip(columns, cells):
+        row[column] = cell
+    return row
+
+
+def is_material_section_label(cells):
+    if not cells:
+        return False
+    return cells[0] in ("Anorganische Stoffe", "Organische Stoffe") and not any(cells[1:])
+
+
+def parse_material_panel_rows(page_rows, start_idx, end_idx, columns, centers, page_number):
+    boundaries = [-float("inf")]
+    for left, right in zip(centers, centers[1:]):
+        boundaries.append((left + right) / 2)
+    boundaries.append(float("inf"))
+
+    parsed_rows = []
+    row_page_ranges = []
+    current = None
+    current_page_range = None
+    for row in page_rows[start_idx:end_idx]:
+        if material_table_stop_row(row) or is_material_class_header_row(row) or row_contains_parameter_dim(row):
+            break
+        if positioned_row_text(row) in ("Anorganische Stoffe", "Organische Stoffe"):
+            continue
+        cells = material_table_row_to_cells(row, boundaries)
+        if not any(cells):
+            continue
+        if is_material_section_label(cells):
+            continue
+        first_cell = cells[0]
+        second_cell = cells[1] if len(cells) > 1 else ""
+        material_values = any(cells[2:])
+        starts_new = bool(first_cell and (second_cell or material_values))
+        if current is not None and first_cell and not second_cell and material_values and current[1]:
+            starts_new = False
+        continuation = current is not None and not starts_new
+        if starts_new:
+            if current is not None:
+                parsed_rows.append(material_cells_to_row(columns, current))
+                row_page_ranges.append(current_page_range)
+            current = cells
+            current_page_range = page_range_from_page(page_number)
+        elif continuation:
+            append_material_cells(current, cells)
+        elif first_cell:
+            current = cells
+            current_page_range = page_range_from_page(page_number)
+    if current is not None:
+        parsed_rows.append(material_cells_to_row(columns, current))
+        row_page_ranges.append(current_page_range)
+    return parsed_rows, row_page_ranges
+
+
+def parse_geometric_material_table(table, block, fitz_word_pages):
+    if not fitz_word_pages:
+        return None
+    title = table.get("title") or ""
+    if "Materialwerte" not in title:
+        return None
+    line_pages = [page for page in block.get("line_pages", []) if page is not None]
+    if not line_pages:
+        return None
+
+    label = table.get("label") or block.get("label") or "Tabelle"
+    table_number_match = re.search(r"\d+[a-z]?", label)
+    table_number = table_number_match.group(0) if table_number_match else None
+    first_page_idx = min(line_pages)
+    sections = []
+
+    for page_idx in sorted(set(line_pages)):
+        if page_idx < 0 or page_idx >= len(fitz_word_pages):
+            continue
+        page_rows = group_positioned_words_into_rows(fitz_word_pages[page_idx])
+        target_label_rows = []
+        different_label_rows = []
+        for idx, row in enumerate(page_rows):
+            text = positioned_row_text(row)
+            label_match = re.match(r"^(?:Fortsetzung\s+)?Tabelle\s+(\d+[a-z]?):", text)
+            if not label_match:
+                continue
+            if table_number is not None and label_match.group(1) == table_number:
+                target_label_rows.append(idx)
+            else:
+                different_label_rows.append(idx)
+        page_start_idx = 0
+        if page_idx == first_page_idx and target_label_rows:
+            page_start_idx = target_label_rows[0] + 1
+        page_end_idx = next(
+            (idx for idx in different_label_rows if idx > page_start_idx),
+            len(page_rows),
+        )
+        for row_idx, row in enumerate(page_rows):
+            if row_idx < page_start_idx or row_idx >= page_end_idx:
+                continue
+            header = None
+            data_start_idx = None
+            if is_material_class_header_row(row):
+                if row_idx + 1 >= len(page_rows) or not row_contains_parameter_dim(page_rows[row_idx + 1]):
+                    continue
+                header = material_header_columns(row, page_rows[row_idx + 1])
+                data_start_idx = row_idx + 2
+            elif row_contains_parameter_dim(row):
+                data_start_idx = row_idx + 1
+                continuation_row = None
+                dim_center = row_dim_center(row)
+                if (
+                    row_idx + 1 < page_end_idx
+                    and is_material_header_continuation(page_rows[row_idx + 1], dim_center)
+                ):
+                    continuation_row = page_rows[row_idx + 1]
+                    data_start_idx = row_idx + 2
+                header = material_header_columns(row, continuation_row=continuation_row)
+            if header is None:
+                continue
+            columns, centers = header
+            end_idx = page_end_idx
+            for next_idx in range(data_start_idx, len(page_rows)):
+                if next_idx >= page_end_idx:
+                    end_idx = page_end_idx
+                    break
+                next_text = positioned_row_text(page_rows[next_idx])
+                if re.match(r"^(?:Fortsetzung\s+)?Tabelle\s+\d+[a-z]?:", next_text):
+                    next_number_match = re.search(r"Tabelle\s+(\d+[a-z]?)", next_text)
+                    next_number = next_number_match.group(1) if next_number_match else None
+                    if next_number != table_number:
+                        end_idx = next_idx
+                        break
+                if re.match(r"^\d+\s+", next_text) and any(
+                    marker in next_text for marker in ("Nur ", "Stoffspezifischer", "PAK", "In Gebieten")
+                ):
+                    end_idx = next_idx
+                    break
+
+            rows, row_page_ranges = parse_material_panel_rows(
+                page_rows,
+                data_start_idx,
+                end_idx,
+                columns,
+                centers,
+                page_idx + 1,
+            )
+            if rows:
+                section_label = " ".join(columns[2:])
+                sections.append(
+                    {
+                        "section_label": section_label,
+                        "columns": columns,
+                        "column_header_text": " | ".join(columns),
+                        "rows": rows,
+                        "row_page_ranges": row_page_ranges,
+                        "notes": [],
+                        "note_page_ranges": [],
+                    }
+                )
+
+    if not sections:
+        return None
+
+    all_columns = []
+    seen_columns = set()
+    for section in sections:
+        for column in section["columns"]:
+            if column not in seen_columns:
+                seen_columns.add(column)
+                all_columns.append(column)
+    return {
+        "label": label,
+        "title": title,
+        "columns": all_columns,
+        "column_header_text": "; ".join(section["column_header_text"] for section in sections),
+        "rows": [row for section in sections for row in section["rows"]],
+        "row_page_ranges": [
+            page_range
+            for section in sections
+            for page_range in section.get("row_page_ranges", [])
+        ],
+        "notes": table.get("notes", []),
+        "note_page_ranges": table.get("note_page_ranges", []),
+        "sections": sections,
+    }
+
+
 def parse_table_block(table_text, line_pages=None, label_override=None):
     """Parse a coarse table block into header metadata and row strings.
 
@@ -998,6 +1329,7 @@ def add_table_from_block(
     pages,
     block,
     confidence=0.70,
+    fitz_word_pages=None,
 ):
     table_text = "\n".join(block.get("lines", [])) if block.get("lines") else block["text"]
     table = parse_table_block(
@@ -1005,6 +1337,9 @@ def add_table_from_block(
         block.get("line_pages"),
         label_override=block.get("label") if block.get("is_implicit_table") else None,
     )
+    geometric_table = parse_geometric_material_table(table, block, fitz_word_pages)
+    if geometric_table is not None:
+        table = geometric_table
     page_range = block.get("page_range") or annex_unit_obj["page_range"]
     table_label = table["label"] or block["label"] or "Tabelle"
     table_global_key = chunk_slug(unit_global_key, table_label)
@@ -1266,6 +1601,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
     doc_sha = sha256_bytes(raw)
     title, date_enacted, full_citation, canonical_citation, doc_metadata = extract_meta(reader, pdf_path)
     fitz_page_texts = extract_fitz_page_texts(pdf_path)
+    fitz_word_pages = extract_fitz_page_words(pdf_path)
 
     pages = []
     all_waste_codes = []
@@ -1456,6 +1792,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
                     pages,
                     annex_chunk,
                     0.70,
+                    fitz_word_pages,
                 )
                 continue
 
