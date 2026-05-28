@@ -590,3 +590,22 @@
   - Neo4j count unchanged: 287 nodes, 1123 relationships.
 - Regression run for VersatzV:
   - Content/reference/Cypher outputs rebuilt; counts unchanged.
+
+### Grid-Based Nested Symbol Headers
+- Removed the remaining groundwater-cover template normalization from the
+  nested symbol-table parser.
+- The parser now reads PyMuPDF table line geometry and assigns header words to
+  their actual grid-cell spans before flattening nested column paths.
+  - This handles merged header cells such as grouped conditions and leaf
+    columns with shared numbers.
+  - It still falls back to word-position heuristics if a PDF page has no
+    usable drawn grid lines.
+- Re-ran ErsatzbaustoffV:
+  - Anlage 2 Tabelle 1 is parsed from geometry into 11 columns and 17 rows.
+  - All 27 Anlage 2 tables use the same 11-column structure.
+  - Multiline title rows are excluded from the flattened column names even when
+    hyphenation/spacing differs between table label and repeated title row.
+  - Content graph, reference graph, and Cypher export were refreshed.
+  - Current content graph: 252 nodes, 408 hierarchy/sequence relationships
+    before references; reference pass adds 715 `REFERS_TO` relationships and
+    35 `ReferenceTarget` nodes.

@@ -168,6 +168,42 @@ def extract_fitz_page_words(path):
     return word_pages
 
 
+def extract_fitz_page_lines(path):
+    if fitz is None:
+        return []
+    line_pages = []
+    with fitz.open(path) as doc:
+        for page in doc:
+            page_lines = []
+            for drawing in page.get_drawings():
+                for item in drawing.get("items", []):
+                    if item[0] != "l":
+                        continue
+                    start, end = item[1], item[2]
+                    x0, y0 = float(start.x), float(start.y)
+                    x1, y1 = float(end.x), float(end.y)
+                    if abs(x0 - x1) < 1.0:
+                        page_lines.append(
+                            {
+                                "orientation": "vertical",
+                                "x": (x0 + x1) / 2,
+                                "y0": min(y0, y1),
+                                "y1": max(y0, y1),
+                            }
+                        )
+                    elif abs(y0 - y1) < 1.0:
+                        page_lines.append(
+                            {
+                                "orientation": "horizontal",
+                                "y": (y0 + y1) / 2,
+                                "x0": min(x0, x1),
+                                "x1": max(x0, x1),
+                            }
+                        )
+            line_pages.append(page_lines)
+    return line_pages
+
+
 def normalize_for_compare(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
@@ -1081,34 +1117,19 @@ def merge_material_panel_sections(sections, all_columns):
     return merged_rows, merged_page_ranges
 
 
-GROUNDWATER_COVER_COLUMNS = [
-    "Eigenschaft der Grundwasserdeckschicht, außerhalb von Wasserschutzbereichen, ungünstig, 1",
-    "Eigenschaft der Grundwasserdeckschicht, außerhalb von Wasserschutzbereichen, günstig, Sand, 2",
-    "Eigenschaft der Grundwasserdeckschicht, außerhalb von Wasserschutzbereichen, günstig, Lehm, Schluff, Ton, 3",
-    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, WSG III A, HSG III, Sand, 4",
-    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, WSG III A, HSG III, Lehm, Schluff, Ton, 4",
-    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, WSG III B, HSG IV, Sand, 5",
-    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, WSG III B, HSG IV, Lehm, Schluff, Ton, 5",
-    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, Wasservorranggebiete, Sand, 6",
-    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, Wasservorranggebiete, Lehm, Schluff, Ton, 6",
-]
-
-
 def parse_table_title_from_text(table_text, fallback):
-    first_line = next((line.strip() for line in table_text.splitlines() if line.strip()), "")
+    lines = [line.strip() for line in table_text.splitlines() if line.strip()]
+    first_line = lines[0] if lines else ""
     match = re.match(r"^(Tabelle\s+\d+[a-z]?)\s*:?\s*(.*)$", first_line)
     if match and match.group(2).strip():
-        return match.group(2).strip()
+        title_lines = [match.group(2).strip()]
+        for line in lines[1:4]:
+            previous = title_lines[-1].rstrip()
+            if not previous.endswith((",", "-", "–")):
+                break
+            title_lines.append(line)
+        return normalize_for_compare(" ".join(title_lines))
     return fallback
-
-
-def is_groundwater_installation_table_text(table_text):
-    normalized = normalize_for_compare(table_text)
-    return (
-        "Eigenschaft der Grundwasserdeckschicht" in normalized
-        and "Einbauweise" in normalized
-        and "Wasserschutzbereichen" in normalized
-    )
 
 
 def is_table_label_row(row):
@@ -1116,18 +1137,13 @@ def is_table_label_row(row):
     return bool(re.match(r"^(?:Fortsetzung\s+)?Tabelle\s+\d+[a-z]?:", text))
 
 
-def row_starts_groundwater_footnote(row):
+def row_starts_symbol_table_footnote(row):
     words = sorted(row, key=lambda word: word[0])
     if len(words) < 2:
         return False
     first = words[0][4]
     rest = normalize_for_compare(" ".join(word[4] for word in words[1:5]))
     return bool(re.match(r"^\d+$", first)) and rest.startswith(("Zulässig", "Zugelassen", "Nicht zugelassen"))
-
-
-def row_is_groundwater_column_number_row(row):
-    tokens = [word[4] for word in row if word[0] > 145]
-    return tokens == ["1", "2", "3", "4", "5", "6"]
 
 
 def nested_column_number_tokens(row):
@@ -1138,7 +1154,7 @@ def nested_column_number_tokens(row):
     return tokens if tokens == expected else []
 
 
-def row_groundwater_values(row, min_x=145):
+def row_symbol_table_values(row, min_x=145):
     value_words = [
         word for word in row
         if word[0] > min_x and re.match(r"^(?:[+–-](?:\d+)?|[KM])$", word[4])
@@ -1146,9 +1162,9 @@ def row_groundwater_values(row, min_x=145):
     return value_words
 
 
-def infer_groundwater_value_centers(page_rows, start_idx, end_idx):
+def infer_symbol_table_value_centers(page_rows, start_idx, end_idx):
     for row in page_rows[start_idx:end_idx]:
-        value_words = row_groundwater_values(row, 145)
+        value_words = row_symbol_table_values(row, 145)
         if len(value_words) >= 8:
             return sorted((word[0] + word[2]) / 2 for word in value_words[:9])
     return [221.7, 265.9, 304.9, 344.0, 383.0, 422.0, 461.0, 501.0, 543.0]
@@ -1176,25 +1192,171 @@ def header_group_text(group):
     return normalize_for_compare(" ".join(word[4] for word in sorted(group, key=lambda candidate: candidate[0])))
 
 
-def assign_header_groups_to_centers(groups, value_centers):
+def normalize_header_identity(text):
+    return slugify(normalize_for_compare(text)).replace("_", "")
+
+
+def word_center(word):
+    return (word[0] + word[2]) / 2, (word[1] + word[3]) / 2
+
+
+def sorted_unique_positions(values, tolerance=1.0):
+    positions = []
+    for value in sorted(values):
+        if not positions or abs(value - positions[-1]) > tolerance:
+            positions.append(value)
+        else:
+            positions[-1] = (positions[-1] + value) / 2
+    return positions
+
+
+def vertical_grid_positions_at_y(page_lines, y, tolerance=0.75):
+    if not page_lines:
+        return []
+    return sorted_unique_positions(
+        line["x"]
+        for line in page_lines
+        if (
+            line.get("orientation") == "vertical"
+            and line["y0"] - tolerance <= y <= line["y1"] + tolerance
+        )
+    )
+
+
+def column_bounds_from_centers(value_centers):
+    if not value_centers:
+        return []
+    if len(value_centers) == 1:
+        return [value_centers[0] - 30, value_centers[0] + 30]
+    bounds = [value_centers[0] - (value_centers[1] - value_centers[0]) / 2]
+    bounds.extend((left + right) / 2 for left, right in zip(value_centers, value_centers[1:]))
+    bounds.append(value_centers[-1] + (value_centers[-1] - value_centers[-2]) / 2)
+    return bounds
+
+
+def value_indices_for_span(left, right, value_centers, tolerance=1.5):
+    return [
+        idx for idx, center in enumerate(value_centers)
+        if left - tolerance <= center <= right + tolerance
+    ]
+
+
+def cell_span_for_word(word, value_centers, page_lines):
+    x, y = word_center(word)
+    verticals = vertical_grid_positions_at_y(page_lines, y)
+    if len(verticals) < 2:
+        return None
+    left_candidates = [position for position in verticals if position <= x]
+    right_candidates = [position for position in verticals if position >= x]
+    if not left_candidates or not right_candidates:
+        return None
+    left = max(left_candidates)
+    right = min(right_candidates)
+    if right - left < 4:
+        return None
+    indices = value_indices_for_span(left, right, value_centers)
+    if not indices:
+        return None
+    return indices[0], indices[-1]
+
+
+def header_cell_assignments_from_grid(row, value_centers, description_max_x, page_lines):
+    cell_words = {}
+    for word in sorted(row, key=lambda candidate: (candidate[1], candidate[0])):
+        if word[2] < description_max_x:
+            continue
+        span = cell_span_for_word(word, value_centers, page_lines)
+        if span is None:
+            continue
+        cell_words.setdefault(span, []).append(word)
+    assignments = [[] for _center in value_centers]
+    for span, words in sorted(cell_words.items(), key=lambda item: (item[0][0], item[0][1])):
+        text = normalize_for_compare(
+            " ".join(word[4] for word in sorted(words, key=lambda candidate: (candidate[1], candidate[0])))
+        )
+        if not text:
+            continue
+        for idx in range(span[0], span[1] + 1):
+            assignments[idx].append(text)
+    return assignments
+
+
+def path_runs(paths):
+    if not paths:
+        return []
+    runs = []
+    start = 0
+    current = tuple(paths[0])
+    for idx, path in enumerate(paths[1:], start=1):
+        path_tuple = tuple(path)
+        if path_tuple == current:
+            continue
+        runs.append((start, idx - 1))
+        start = idx
+        current = path_tuple
+    runs.append((start, len(paths) - 1))
+    return runs
+
+
+def group_bbox(group):
+    return (
+        min(word[0] for word in group),
+        min(word[1] for word in group),
+        max(word[2] for word in group),
+        max(word[3] for word in group),
+    )
+
+
+def assign_header_groups_to_centers_with_paths(groups, value_centers, paths):
     assignments = [[] for _center in value_centers]
     if not groups:
         return assignments
-    group_centers = [
-        sum((word[0] + word[2]) / 2 for word in group) / len(group)
-        for group in groups
-    ]
-    boundaries = [-float("inf")]
-    for left, right in zip(group_centers, group_centers[1:]):
-        boundaries.append((left + right) / 2)
-    boundaries.append(float("inf"))
-    for group_idx, group in enumerate(groups):
+    value_bounds = column_bounds_from_centers(value_centers)
+    group_meta = []
+    for group in groups:
         text = header_group_text(group)
         if not text:
             continue
-        for center_idx, center in enumerate(value_centers):
-            if boundaries[group_idx] <= center < boundaries[group_idx + 1]:
-                assignments[center_idx].append(text)
+        x0, _y0, x1, _y1 = group_bbox(group)
+        group_meta.append({"group": group, "text": text, "x0": x0, "x1": x1, "center": (x0 + x1) / 2})
+    if not group_meta:
+        return assignments
+    for start_idx, end_idx in path_runs(paths):
+        parent_left = value_bounds[start_idx]
+        parent_right = value_bounds[end_idx + 1]
+        relevant = [
+            item for item in group_meta
+            if (
+                parent_left - 8 <= item["center"] <= parent_right + 8
+                or (item["x1"] >= parent_left and item["x0"] <= parent_right)
+            )
+        ]
+        if not relevant:
+            continue
+        if len(relevant) == 1:
+            item = relevant[0]
+            parent_center = sum(value_centers[start_idx:end_idx + 1]) / (end_idx - start_idx + 1)
+            parent_width = max(parent_right - parent_left, 1)
+            if start_idx == end_idx or abs(item["center"] - parent_center) <= parent_width * 0.18:
+                target_indices = range(start_idx, end_idx + 1)
+            else:
+                target_indices = [
+                    min(range(start_idx, end_idx + 1), key=lambda idx: abs(value_centers[idx] - item["center"]))
+                ]
+            for center_idx in target_indices:
+                assignments[center_idx].append(item["text"])
+            continue
+
+        relevant = sorted(relevant, key=lambda item: item["center"])
+        boundaries = [
+            (left["center"] + right["center"]) / 2
+            for left, right in zip(relevant, relevant[1:])
+        ]
+        for center_idx in range(start_idx, end_idx + 1):
+            group_idx = 0
+            while group_idx < len(boundaries) and value_centers[center_idx] >= boundaries[group_idx]:
+                group_idx += 1
+            assignments[center_idx].append(relevant[group_idx]["text"])
     return assignments
 
 
@@ -1234,22 +1396,51 @@ def detect_row_header_label(header_rows, description_max_x):
     return candidates[-1] if candidates else "Zeile"
 
 
-def derive_nested_symbol_columns(page_rows, page_start_idx, number_row_idx, value_centers, description_max_x, title):
+def derive_nested_symbol_columns(
+    page_rows,
+    page_start_idx,
+    number_row_idx,
+    value_centers,
+    description_max_x,
+    title,
+    page_lines=None,
+):
     header_rows = page_rows[page_start_idx:number_row_idx]
     row_label = detect_row_header_label(header_rows, description_max_x)
     paths = [[] for _center in value_centers]
     normalized_title = normalize_for_compare(title or "")
+    title_identity = normalize_header_identity(title or "")
 
     for row in header_rows:
         text = positioned_row_text(row)
         if not text or PAGE_HEADER_RE.match(text) or is_table_label_row(row):
             continue
-        if normalized_title and normalize_for_compare(text) == normalized_title:
+        text_identity = normalize_header_identity(text)
+        if normalized_title and (
+            normalize_for_compare(text) == normalized_title
+            or (title_identity and text_identity == title_identity)
+            or (title_identity and len(text_identity) >= 12 and text_identity in title_identity)
+            or (title_identity and len(title_identity) >= 12 and title_identity in text_identity)
+        ):
             continue
         if normalize_for_compare(text) == row_label:
             continue
-        groups = group_header_row_words(row, description_max_x)
-        for center_idx, labels in enumerate(assign_header_groups_to_centers(groups, value_centers)):
+        labels_by_center = []
+        if page_lines:
+            labels_by_center = header_cell_assignments_from_grid(
+                row,
+                value_centers,
+                description_max_x,
+                page_lines,
+            )
+        if not any(labels_by_center):
+            groups = group_header_row_words(row, description_max_x)
+            labels_by_center = assign_header_groups_to_centers_with_paths(
+                groups,
+                value_centers,
+                paths,
+            )
+        for center_idx, labels in enumerate(labels_by_center):
             paths[center_idx].extend(labels)
 
     number_words = [
@@ -1302,7 +1493,7 @@ def new_symbol_table_row(number, row_number_key, row_label_key, value_columns, p
     return row, page_range_from_page(page_number)
 
 
-def parse_geometric_groundwater_table(table, block, fitz_word_pages):
+def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=None):
     table_text = "\n".join(block.get("lines", [])) if block.get("lines") else block.get("text", "")
     if not fitz_word_pages:
         return None
@@ -1345,7 +1536,7 @@ def parse_geometric_groundwater_table(table, block, fitz_word_pages):
             len(page_rows),
         )
         for idx in range(page_start_idx, page_end_idx):
-            if row_starts_groundwater_footnote(page_rows[idx]):
+            if row_starts_symbol_table_footnote(page_rows[idx]):
                 page_end_idx = idx
                 break
 
@@ -1359,14 +1550,17 @@ def parse_geometric_groundwater_table(table, block, fitz_word_pages):
         if data_start_idx is None:
             continue
 
-        value_centers = infer_groundwater_value_centers(page_rows, data_start_idx, page_end_idx)
+        value_centers = infer_symbol_table_value_centers(page_rows, data_start_idx, page_end_idx)
         symbol_rows = [
             row for row in page_rows[data_start_idx:page_end_idx]
-            if len(row_groundwater_values(row, 145)) >= 5
+            if len(row_symbol_table_values(row, 145)) >= 5
         ]
         if len(symbol_rows) < 1:
             continue
         description_max_x = value_centers[0] - 20
+        page_lines = []
+        if fitz_page_lines and page_idx < len(fitz_page_lines):
+            page_lines = fitz_page_lines[page_idx]
         row_number_key, row_label_key, value_columns = derive_nested_symbol_columns(
             page_rows,
             page_start_idx,
@@ -1374,13 +1568,10 @@ def parse_geometric_groundwater_table(table, block, fitz_word_pages):
             value_centers,
             description_max_x,
             title,
+            page_lines,
         )
-        if is_groundwater_installation_table_text(table_text):
-            row_number_key = "Einbauweise Nummer"
-            row_label_key = "Einbauweise"
-            value_columns = GROUNDWATER_COVER_COLUMNS
         for row in page_rows[data_start_idx:page_end_idx]:
-            if PAGE_HEADER_RE.match(positioned_row_text(row)) or row_starts_groundwater_footnote(row):
+            if PAGE_HEADER_RE.match(positioned_row_text(row)) or row_starts_symbol_table_footnote(row):
                 continue
             words = sorted(row, key=lambda word: word[0])
             if not words:
@@ -1417,7 +1608,7 @@ def parse_geometric_groundwater_table(table, block, fitz_word_pages):
                 )
             assign_symbol_values(
                 current,
-                row_groundwater_values(row, description_max_x),
+                row_symbol_table_values(row, description_max_x),
                 value_centers,
                 value_columns,
             )
@@ -1755,6 +1946,7 @@ def add_table_from_block(
     block,
     confidence=0.70,
     fitz_word_pages=None,
+    fitz_page_lines=None,
 ):
     table_text = "\n".join(block.get("lines", [])) if block.get("lines") else block["text"]
     table = parse_table_block(
@@ -1762,7 +1954,7 @@ def add_table_from_block(
         block.get("line_pages"),
         label_override=block.get("label") if block.get("is_implicit_table") else None,
     )
-    geometric_table = parse_geometric_groundwater_table(table, block, fitz_word_pages)
+    geometric_table = parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines)
     if geometric_table is None:
         geometric_table = parse_geometric_material_table(table, block, fitz_word_pages)
     if geometric_table is not None:
@@ -2029,6 +2221,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
     title, date_enacted, full_citation, canonical_citation, doc_metadata = extract_meta(reader, pdf_path)
     fitz_page_texts = extract_fitz_page_texts(pdf_path)
     fitz_word_pages = extract_fitz_page_words(pdf_path)
+    fitz_page_lines = extract_fitz_page_lines(pdf_path)
 
     pages = []
     all_waste_codes = []
@@ -2220,6 +2413,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
                     annex_chunk,
                     0.70,
                     fitz_word_pages,
+                    fitz_page_lines,
                 )
                 continue
 
