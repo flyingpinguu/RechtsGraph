@@ -150,7 +150,9 @@
   - Numbered and lettered list items are extracted as `list_item` child chunks.
   - Nested list items are represented, e.g. `VersatzV § 4 Abs. 2 Nr. 2` has children `Buchst. a` and `Buchst. b`.
   - `Anlage ...` headings are now recognized as structural-unit boundaries so paragraph text does not run into annexes.
-  - Anlagen are extracted as `annex` units with coarse chunks such as `annex_text`, `table_block`, `annex_section`, and `appendix_block`.
+  - Anlagen are extracted as `annex` units with coarse chunks. Current default:
+    one `annex_text` chunk plus explicit `table` units where tables are
+    recognized.
 - Re-ran extraction for `abfall_pdfs/09_VersatzV.pdf`.
   - Raw output: `pdf-neo4j-pipeline/output/raw_versatzv_v2.json`.
   - Result: 15 pages, 11 structural units (`7 paragraph`, `4 annex`), 64 chunks.
@@ -171,14 +173,16 @@
 - Added first-pass table handling.
   - Tables inside Anlagen are modeled as `table` structural units under their parent `annex` unit.
   - Table retrieval chunks use `chunk_type=table_rows`.
-  - Table row chunks contain at most 10 extracted row lines.
+  - Historical note: table row chunks were initially split into small row
+    groups. Current default is one `table_rows` chunk per detected table.
   - Each table row chunk includes `columns`, `column_header_text`, `row_range`, `rows`, and `text` with the column headers prepended.
 - Re-ran extraction for `abfall_pdfs/09_VersatzV.pdf`.
   - Raw output: `pdf-neo4j-pipeline/output/raw_versatzv_v3.json`.
   - Page files: `pdf-neo4j-pipeline/output/pages/versatzv/page_001.json` through `page_015.json`.
   - Review shards: `pdf-neo4j-pipeline/output/review_shards/VersatzV_v3/`.
   - Result: 15 page refs, 14 structural units (`7 paragraph`, `4 annex`, `3 table`), 56 chunks.
-  - Chunk types: `subsection`, `paragraph_text`, `annex_text`, `annex_section`, `table_rows`, `appendix_block`.
+  - Historical note: this run still emitted `annex_section`/`appendix_block`;
+    current default no longer emits those chunk types.
   - Table examples: `VersatzV Anlage 2 Tabelle 1`, `Tabelle 1a`, and `Tabelle 2` are table units with row chunks.
 - Removed obsolete `raw_versatzv_v2.json` and `review_shards/VersatzV_v2/`.
 
@@ -468,3 +472,27 @@
   - Targeted bad-edge checks: 0 hits for the reviewed false internal edges.
 - Re-ran VersatzV reference extraction:
   - `REFERS_TO`: 68, unchanged.
+
+### Annex Section Split Disabled
+- Disabled automatic `annex_section` and `appendix_block` chunk creation in
+  `extract_normtext.py`.
+- Rationale: numbered decimal lines inside annexes are often form fields or
+  table-internal labels, especially in Musteranlagen such as ErsatzbaustoffV
+  Anlagen 7 and 8. Treating them as legal sections created misleading graph
+  nodes.
+- Current annex behavior:
+  - Non-table annex content stays in one `annex_text` chunk per annex.
+  - Explicit table headings such as `Tabelle 1:` are still converted into
+    `table` StructuralUnits with one `table_rows` chunk.
+  - Implicit tables without `Tabelle` heading, e.g. ErsatzbaustoffV Anlage 6,
+    are intentionally left as `annex_text` until a separate implicit-table
+    detector is added.
+- Re-ran ErsatzbaustoffV:
+  - Reference graph: 283 nodes, 1119 relationships.
+  - Chunk labels: 102 `subsection`, 46 `table_rows`, 8 `annex_text`, 4
+    `paragraph_text`, 2 `waste_code_entry`.
+  - `Chunk_annex_section`: 0; `Chunk_appendix_block`: 0.
+  - Anlagen 7 and 8 are each represented as one `annex_text` chunk.
+- Re-ran VersatzV:
+  - Reference graph: 38 nodes, 118 relationships.
+  - `Chunk_annex_section`: 0; `Chunk_appendix_block`: 0.

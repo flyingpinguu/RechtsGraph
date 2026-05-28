@@ -540,7 +540,7 @@ def merge_page_ranges(page_ranges):
 
 
 def split_annex_into_chunks(annex):
-    """Split Anlage text into coarse chunks at table and decimal headings."""
+    """Split Anlage text into text and explicit table blocks only."""
     if isinstance(annex, dict):
         annex_lines = annex.get("lines", [])
         annex_line_pages = annex.get("line_pages", [annex.get("start_page", 0)] * len(annex_lines))
@@ -550,7 +550,7 @@ def split_annex_into_chunks(annex):
 
     chunks = []
     current = None
-    heading_re = re.compile(r"^(Tabelle\s+\d+[a-z]?\s*:?.*|(?:\d+(?:\.\d+)+)\s+.+|Anhang\s+\d+.*)$")
+    heading_re = re.compile(r"^(Tabelle\s+\d+[a-z]?\s*:?.*)$")
     for line, page_idx in zip(annex_lines, annex_line_pages):
         stripped = line.strip()
         match = heading_re.match(stripped)
@@ -558,15 +558,9 @@ def split_annex_into_chunks(annex):
             if current is not None:
                 chunks.append(finalize_annex_chunk(current))
             label = match.group(1)
-            if label.startswith("Tabelle"):
-                chunk_type = "table_block"
-            elif label.startswith("Anhang"):
-                chunk_type = "appendix_block"
-            else:
-                chunk_type = "annex_section"
             current = {
                 "label": label,
-                "chunk_type": chunk_type,
+                "chunk_type": "table_block",
                 "lines": [line],
                 "line_pages": [page_idx],
             }
@@ -1395,70 +1389,6 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None):
                     0.70,
                 )
                 continue
-
-            if annex_chunk["chunk_type"] == "appendix_block" and "Untersuchungsmethoden" in annex_chunk["text"]:
-                add_table_from_block(
-                    structural_units,
-                    chunks,
-                    doc_id,
-                    doc_key,
-                    document_global_key,
-                    label,
-                    unit_id,
-                    unit_obj,
-                    unit_citation,
-                    unit_global_key,
-                    pages,
-                    annex_chunk,
-                    0.60,
-                )
-                continue
-
-            if annex_chunk["chunk_type"] == "appendix_block" and annex_chunk.get("line_pages"):
-                grouped = []
-                current_group = None
-                for line, line_page in zip(annex_chunk["lines"], annex_chunk["line_pages"]):
-                    if current_group is None or current_group["page_idx"] != line_page:
-                        if current_group is not None:
-                            grouped.append(current_group)
-                        current_group = {"page_idx": line_page, "lines": []}
-                    current_group["lines"].append(line)
-                if current_group is not None:
-                    grouped.append(current_group)
-                if len(grouped) > 1:
-                    for group_idx, group in enumerate(grouped, start=1):
-                        chunk_text = "\n".join(group["lines"]).strip()
-                        if not chunk_text:
-                            continue
-                        page_number = group["page_idx"] + 1
-                        label_part = "{} Seite {}".format(annex_chunk["label"] or "Anhang", page_number)
-                        chunk_global_key = chunk_slug(unit_global_key, label_part)
-                        chunk_id = "chunk_{}".format(chunk_global_key)
-                        chunk_citation = "{} {}".format(unit_citation, label_part)
-                        chunks.append(
-                            {
-                                "chunk_id": chunk_id,
-                                "global_key": chunk_global_key,
-                                "legal_citation": chunk_citation,
-                                "display_name": chunk_citation,
-                                "chunk_type": "appendix_block",
-                                "unit_id": unit_id,
-                                "document_global_key": document_global_key,
-                                "parent_chunk_id": None,
-                                "child_chunk_ids": [],
-                                "label": label_part,
-                                "number": None,
-                                "sequence": chunk_idx + group_idx,
-                                "page_id": pages[group["page_idx"]]["page_id"],
-                                "page_range": {"start": page_number, "end": page_number},
-                                "text": chunk_text,
-                                "text_sha256": sha256_str(chunk_text),
-                                "evidence_text": chunk_text,
-                                "confidence": 0.70,
-                                "review_status": "pending",
-                            }
-                        )
-                    continue
 
             label_part = annex_chunk["label"] or "text"
             chunk_global_key = chunk_slug(unit_global_key, label_part)
