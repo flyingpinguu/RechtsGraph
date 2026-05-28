@@ -571,3 +571,22 @@
   - Neo4j count unchanged: 287 nodes, 1123 relationships.
 - Regression run for VersatzV:
   - Content/reference/Cypher outputs rebuilt; counts unchanged.
+
+### Generalized Nested Symbol Table Detection
+- Refactored the nested-header table handling so detection is geometric rather
+  than only keyword-based.
+  - The parser looks for a leaf-number header row and subsequent rows with many
+    symbolic values such as `+`, `–`, `+1`, or `K/M`.
+  - It derives flattened column paths from the header rows above the leaf
+    columns.
+  - Known federal groundwater-cover tables still receive a template
+    normalization step, because their visual header spans are too ambiguous for
+    purely geometric path assignment to be fully reliable.
+- Re-ran ErsatzbaustoffV:
+  - Anlage 2 Tabelle 1 remains correctly parsed with 17 rows and 11 columns.
+  - All 27 Anlage 2 tables use the 11-column flattened structure.
+  - Content graph, reference graph, Cypher export, and local Neo4j import were
+    refreshed.
+  - Neo4j count unchanged: 287 nodes, 1123 relationships.
+- Regression run for VersatzV:
+  - Content/reference/Cypher outputs rebuilt; counts unchanged.

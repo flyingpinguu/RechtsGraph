@@ -1130,6 +1130,14 @@ def row_is_groundwater_column_number_row(row):
     return tokens == ["1", "2", "3", "4", "5", "6"]
 
 
+def nested_column_number_tokens(row):
+    tokens = [word[4] for word in row if word[0] > 145 and re.match(r"^\d+$", word[4])]
+    if len(tokens) < 3:
+        return []
+    expected = [str(idx) for idx in range(1, len(tokens) + 1)]
+    return tokens if tokens == expected else []
+
+
 def row_groundwater_values(row, min_x=145):
     value_words = [
         word for word in row
@@ -1146,32 +1154,157 @@ def infer_groundwater_value_centers(page_rows, start_idx, end_idx):
     return [221.7, 265.9, 304.9, 344.0, 383.0, 422.0, 461.0, 501.0, 543.0]
 
 
-def assign_groundwater_values(row_obj, value_words, value_centers):
+def group_header_row_words(row, min_x):
+    groups = []
+    current = []
+    last_x1 = None
+    for word in sorted(row, key=lambda candidate: candidate[0]):
+        if word[2] < min_x:
+            continue
+        if last_x1 is None or word[0] - last_x1 <= 22:
+            current.append(word)
+        else:
+            groups.append(current)
+            current = [word]
+        last_x1 = word[2]
+    if current:
+        groups.append(current)
+    return groups
+
+
+def header_group_text(group):
+    return normalize_for_compare(" ".join(word[4] for word in sorted(group, key=lambda candidate: candidate[0])))
+
+
+def assign_header_groups_to_centers(groups, value_centers):
+    assignments = [[] for _center in value_centers]
+    if not groups:
+        return assignments
+    group_centers = [
+        sum((word[0] + word[2]) / 2 for word in group) / len(group)
+        for group in groups
+    ]
+    boundaries = [-float("inf")]
+    for left, right in zip(group_centers, group_centers[1:]):
+        boundaries.append((left + right) / 2)
+    boundaries.append(float("inf"))
+    for group_idx, group in enumerate(groups):
+        text = header_group_text(group)
+        if not text:
+            continue
+        for center_idx, center in enumerate(value_centers):
+            if boundaries[group_idx] <= center < boundaries[group_idx + 1]:
+                assignments[center_idx].append(text)
+    return assignments
+
+
+def compact_header_path(parts):
+    compacted = []
+    for part in parts:
+        part = normalize_for_compare(part)
+        if not part or part in compacted[-1:]:
+            continue
+        if compacted and compacted[-1].endswith("-"):
+            compacted[-1] = "{}{}".format(compacted[-1][:-1], part)
+            continue
+        if compacted and compacted[-1].endswith("von"):
+            compacted[-1] = "{} {}".format(compacted[-1], part)
+            continue
+        if compacted and compacted[-1].endswith(","):
+            compacted[-1] = "{} {}".format(compacted[-1], part)
+            continue
+        compacted.append(part)
+    return compacted
+
+
+def detect_row_header_label(header_rows, description_max_x):
+    candidates = []
+    for row in header_rows:
+        left_text = normalize_for_compare(
+            " ".join(
+                word[4]
+                for word in sorted(row, key=lambda candidate: (candidate[1], candidate[0]))
+                if 45 <= word[0] < description_max_x
+            )
+        )
+        if left_text and not re.fullmatch(r"\d+(?:\s+\d+)*", left_text):
+            candidates.append(left_text)
+    if "Einbauweise" in candidates:
+        return "Einbauweise"
+    return candidates[-1] if candidates else "Zeile"
+
+
+def derive_nested_symbol_columns(page_rows, page_start_idx, number_row_idx, value_centers, description_max_x, title):
+    header_rows = page_rows[page_start_idx:number_row_idx]
+    row_label = detect_row_header_label(header_rows, description_max_x)
+    paths = [[] for _center in value_centers]
+    normalized_title = normalize_for_compare(title or "")
+
+    for row in header_rows:
+        text = positioned_row_text(row)
+        if not text or PAGE_HEADER_RE.match(text) or is_table_label_row(row):
+            continue
+        if normalized_title and normalize_for_compare(text) == normalized_title:
+            continue
+        if normalize_for_compare(text) == row_label:
+            continue
+        groups = group_header_row_words(row, description_max_x)
+        for center_idx, labels in enumerate(assign_header_groups_to_centers(groups, value_centers)):
+            paths[center_idx].extend(labels)
+
+    number_words = [
+        word for word in page_rows[number_row_idx]
+        if word[0] > 145 and re.match(r"^\d+$", word[4])
+    ]
+    number_centers = [((word[0] + word[2]) / 2, word[4]) for word in number_words]
+    for center_idx, center in enumerate(value_centers):
+        if number_centers:
+            _nearest_center, number_label = min(number_centers, key=lambda item: abs(item[0] - center))
+            paths[center_idx].append(number_label)
+
+    value_columns = []
+    for idx, path in enumerate(paths, start=1):
+        compacted = compact_header_path(path)
+        if compacted:
+            value_columns.append(", ".join(compacted))
+        else:
+            value_columns.append("Wert {}".format(idx))
+
+    if row_label == "Einbauweise":
+        row_number_key = "Einbauweise Nummer"
+        row_label_key = "Einbauweise"
+    else:
+        row_number_key = "{} Nummer".format(row_label)
+        row_label_key = row_label
+    return row_number_key, row_label_key, value_columns
+
+
+def assign_symbol_values(row_obj, value_words, value_centers, value_columns):
     for word in value_words:
         center = (word[0] + word[2]) / 2
         idx = min(range(len(value_centers)), key=lambda i: abs(value_centers[i] - center))
-        if idx >= len(GROUNDWATER_COVER_COLUMNS) or abs(value_centers[idx] - center) > 28:
+        if idx >= len(value_columns) or abs(value_centers[idx] - center) > 28:
             continue
-        column = GROUNDWATER_COVER_COLUMNS[idx]
+        column = value_columns[idx]
         if row_obj[column]:
             row_obj[column] = "{} {}".format(row_obj[column], word[4]).strip()
         else:
             row_obj[column] = word[4]
 
 
-def new_groundwater_row(number, page_number):
+def new_symbol_table_row(number, row_number_key, row_label_key, value_columns, page_number):
     row = {
-        "Einbauweise Nummer": number,
-        "Einbauweise": "",
+        row_number_key: number,
+        row_label_key: "",
     }
-    for column in GROUNDWATER_COVER_COLUMNS:
+    for column in value_columns:
         row[column] = ""
     return row, page_range_from_page(page_number)
 
 
 def parse_geometric_groundwater_table(table, block, fitz_word_pages):
     table_text = "\n".join(block.get("lines", [])) if block.get("lines") else block.get("text", "")
-    if not is_groundwater_installation_table_text(table_text) or not fitz_word_pages:
+    if not fitz_word_pages:
         return None
     line_pages = [page for page in block.get("line_pages", []) if page is not None]
     if not line_pages:
@@ -1217,15 +1350,35 @@ def parse_geometric_groundwater_table(table, block, fitz_word_pages):
                 break
 
         data_start_idx = None
+        number_row_idx = None
         for idx in range(page_start_idx, page_end_idx):
-            if row_is_groundwater_column_number_row(page_rows[idx]):
+            if nested_column_number_tokens(page_rows[idx]):
+                number_row_idx = idx
                 data_start_idx = idx + 1
                 break
         if data_start_idx is None:
             continue
 
         value_centers = infer_groundwater_value_centers(page_rows, data_start_idx, page_end_idx)
+        symbol_rows = [
+            row for row in page_rows[data_start_idx:page_end_idx]
+            if len(row_groundwater_values(row, 145)) >= 5
+        ]
+        if len(symbol_rows) < 1:
+            continue
         description_max_x = value_centers[0] - 20
+        row_number_key, row_label_key, value_columns = derive_nested_symbol_columns(
+            page_rows,
+            page_start_idx,
+            number_row_idx,
+            value_centers,
+            description_max_x,
+            title,
+        )
+        if is_groundwater_installation_table_text(table_text):
+            row_number_key = "Einbauweise Nummer"
+            row_label_key = "Einbauweise"
+            value_columns = GROUNDWATER_COVER_COLUMNS
         for row in page_rows[data_start_idx:page_end_idx]:
             if PAGE_HEADER_RE.match(positioned_row_text(row)) or row_starts_groundwater_footnote(row):
                 continue
@@ -1236,10 +1389,16 @@ def parse_geometric_groundwater_table(table, block, fitz_word_pages):
             starts_new = first_word[0] < 66 and re.match(r"^\d+$", first_word[4])
             if starts_new:
                 if current is not None:
-                    current["Einbauweise"] = normalize_for_compare(current["Einbauweise"])
+                    current[row_label_key] = normalize_for_compare(current[row_label_key])
                     rows.append(current)
                     row_page_ranges.append(current_page_range)
-                current, current_page_range = new_groundwater_row(first_word[4], page_idx + 1)
+                current, current_page_range = new_symbol_table_row(
+                    first_word[4],
+                    row_number_key,
+                    row_label_key,
+                    value_columns,
+                    page_idx + 1,
+                )
                 description_words = [
                     word[4] for word in sorted(words, key=lambda candidate: (candidate[1], candidate[0]))
                     if 66 <= word[0] < description_max_x
@@ -1253,20 +1412,25 @@ def parse_geometric_groundwater_table(table, block, fitz_word_pages):
                 ]
                 current_page_range = merge_page_ranges([current_page_range, page_range_from_page(page_idx + 1)])
             if description_words:
-                current["Einbauweise"] = normalize_for_compare(
-                    "{} {}".format(current["Einbauweise"], " ".join(description_words))
+                current[row_label_key] = normalize_for_compare(
+                    "{} {}".format(current[row_label_key], " ".join(description_words))
                 )
-            assign_groundwater_values(current, row_groundwater_values(row, description_max_x), value_centers)
+            assign_symbol_values(
+                current,
+                row_groundwater_values(row, description_max_x),
+                value_centers,
+                value_columns,
+            )
 
     if current is not None:
-        current["Einbauweise"] = normalize_for_compare(current["Einbauweise"])
+        current[row_label_key] = normalize_for_compare(current[row_label_key])
         rows.append(current)
         row_page_ranges.append(current_page_range)
 
     if not rows:
         return None
 
-    columns = ["Einbauweise Nummer", "Einbauweise"] + GROUNDWATER_COVER_COLUMNS
+    columns = [row_number_key, row_label_key] + value_columns
     header_text = " | ".join(columns)
     return {
         "label": label,
