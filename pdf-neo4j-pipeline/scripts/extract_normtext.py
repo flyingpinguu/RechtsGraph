@@ -1081,6 +1081,216 @@ def merge_material_panel_sections(sections, all_columns):
     return merged_rows, merged_page_ranges
 
 
+GROUNDWATER_COVER_COLUMNS = [
+    "Eigenschaft der Grundwasserdeckschicht, außerhalb von Wasserschutzbereichen, ungünstig, 1",
+    "Eigenschaft der Grundwasserdeckschicht, außerhalb von Wasserschutzbereichen, günstig, Sand, 2",
+    "Eigenschaft der Grundwasserdeckschicht, außerhalb von Wasserschutzbereichen, günstig, Lehm, Schluff, Ton, 3",
+    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, WSG III A, HSG III, Sand, 4",
+    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, WSG III A, HSG III, Lehm, Schluff, Ton, 4",
+    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, WSG III B, HSG IV, Sand, 5",
+    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, WSG III B, HSG IV, Lehm, Schluff, Ton, 5",
+    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, Wasservorranggebiete, Sand, 6",
+    "Eigenschaft der Grundwasserdeckschicht, innerhalb von Wasserschutzbereichen, günstig, Wasservorranggebiete, Lehm, Schluff, Ton, 6",
+]
+
+
+def parse_table_title_from_text(table_text, fallback):
+    first_line = next((line.strip() for line in table_text.splitlines() if line.strip()), "")
+    match = re.match(r"^(Tabelle\s+\d+[a-z]?)\s*:?\s*(.*)$", first_line)
+    if match and match.group(2).strip():
+        return match.group(2).strip()
+    return fallback
+
+
+def is_groundwater_installation_table_text(table_text):
+    normalized = normalize_for_compare(table_text)
+    return (
+        "Eigenschaft der Grundwasserdeckschicht" in normalized
+        and "Einbauweise" in normalized
+        and "Wasserschutzbereichen" in normalized
+    )
+
+
+def is_table_label_row(row):
+    text = positioned_row_text(row)
+    return bool(re.match(r"^(?:Fortsetzung\s+)?Tabelle\s+\d+[a-z]?:", text))
+
+
+def row_starts_groundwater_footnote(row):
+    words = sorted(row, key=lambda word: word[0])
+    if len(words) < 2:
+        return False
+    first = words[0][4]
+    rest = normalize_for_compare(" ".join(word[4] for word in words[1:5]))
+    return bool(re.match(r"^\d+$", first)) and rest.startswith(("Zulässig", "Zugelassen", "Nicht zugelassen"))
+
+
+def row_is_groundwater_column_number_row(row):
+    tokens = [word[4] for word in row if word[0] > 145]
+    return tokens == ["1", "2", "3", "4", "5", "6"]
+
+
+def row_groundwater_values(row, min_x=145):
+    value_words = [
+        word for word in row
+        if word[0] > min_x and re.match(r"^(?:[+–-](?:\d+)?|[KM])$", word[4])
+    ]
+    return value_words
+
+
+def infer_groundwater_value_centers(page_rows, start_idx, end_idx):
+    for row in page_rows[start_idx:end_idx]:
+        value_words = row_groundwater_values(row, 145)
+        if len(value_words) >= 8:
+            return sorted((word[0] + word[2]) / 2 for word in value_words[:9])
+    return [221.7, 265.9, 304.9, 344.0, 383.0, 422.0, 461.0, 501.0, 543.0]
+
+
+def assign_groundwater_values(row_obj, value_words, value_centers):
+    for word in value_words:
+        center = (word[0] + word[2]) / 2
+        idx = min(range(len(value_centers)), key=lambda i: abs(value_centers[i] - center))
+        if idx >= len(GROUNDWATER_COVER_COLUMNS) or abs(value_centers[idx] - center) > 28:
+            continue
+        column = GROUNDWATER_COVER_COLUMNS[idx]
+        if row_obj[column]:
+            row_obj[column] = "{} {}".format(row_obj[column], word[4]).strip()
+        else:
+            row_obj[column] = word[4]
+
+
+def new_groundwater_row(number, page_number):
+    row = {
+        "Einbauweise Nummer": number,
+        "Einbauweise": "",
+    }
+    for column in GROUNDWATER_COVER_COLUMNS:
+        row[column] = ""
+    return row, page_range_from_page(page_number)
+
+
+def parse_geometric_groundwater_table(table, block, fitz_word_pages):
+    table_text = "\n".join(block.get("lines", [])) if block.get("lines") else block.get("text", "")
+    if not is_groundwater_installation_table_text(table_text) or not fitz_word_pages:
+        return None
+    line_pages = [page for page in block.get("line_pages", []) if page is not None]
+    if not line_pages:
+        return None
+
+    label = table.get("label") or block.get("label") or "Tabelle"
+    title = parse_table_title_from_text(table_text, table.get("title"))
+    table_number_match = re.search(r"\d+[a-z]?", label)
+    table_number = table_number_match.group(0) if table_number_match else None
+    first_page_idx = min(line_pages)
+
+    rows = []
+    row_page_ranges = []
+    current = None
+    current_page_range = None
+
+    for page_idx in sorted(set(line_pages)):
+        if page_idx < 0 or page_idx >= len(fitz_word_pages):
+            continue
+        page_rows = group_positioned_words_into_rows(fitz_word_pages[page_idx])
+        target_label_rows = []
+        different_label_rows = []
+        for idx, row in enumerate(page_rows):
+            text = positioned_row_text(row)
+            label_match = re.match(r"^(?:Fortsetzung\s+)?Tabelle\s+(\d+[a-z]?):", text)
+            if not label_match:
+                continue
+            if table_number is not None and label_match.group(1) == table_number:
+                target_label_rows.append(idx)
+            else:
+                different_label_rows.append(idx)
+
+        page_start_idx = 0
+        if page_idx == first_page_idx and target_label_rows:
+            page_start_idx = target_label_rows[0] + 1
+        page_end_idx = next(
+            (idx for idx in different_label_rows if idx > page_start_idx),
+            len(page_rows),
+        )
+        for idx in range(page_start_idx, page_end_idx):
+            if row_starts_groundwater_footnote(page_rows[idx]):
+                page_end_idx = idx
+                break
+
+        data_start_idx = None
+        for idx in range(page_start_idx, page_end_idx):
+            if row_is_groundwater_column_number_row(page_rows[idx]):
+                data_start_idx = idx + 1
+                break
+        if data_start_idx is None:
+            continue
+
+        value_centers = infer_groundwater_value_centers(page_rows, data_start_idx, page_end_idx)
+        description_max_x = value_centers[0] - 20
+        for row in page_rows[data_start_idx:page_end_idx]:
+            if PAGE_HEADER_RE.match(positioned_row_text(row)) or row_starts_groundwater_footnote(row):
+                continue
+            words = sorted(row, key=lambda word: word[0])
+            if not words:
+                continue
+            first_word = words[0]
+            starts_new = first_word[0] < 66 and re.match(r"^\d+$", first_word[4])
+            if starts_new:
+                if current is not None:
+                    current["Einbauweise"] = normalize_for_compare(current["Einbauweise"])
+                    rows.append(current)
+                    row_page_ranges.append(current_page_range)
+                current, current_page_range = new_groundwater_row(first_word[4], page_idx + 1)
+                description_words = [
+                    word[4] for word in sorted(words, key=lambda candidate: (candidate[1], candidate[0]))
+                    if 66 <= word[0] < description_max_x
+                ]
+            else:
+                if current is None:
+                    continue
+                description_words = [
+                    word[4] for word in sorted(words, key=lambda candidate: (candidate[1], candidate[0]))
+                    if word[0] < description_max_x
+                ]
+                current_page_range = merge_page_ranges([current_page_range, page_range_from_page(page_idx + 1)])
+            if description_words:
+                current["Einbauweise"] = normalize_for_compare(
+                    "{} {}".format(current["Einbauweise"], " ".join(description_words))
+                )
+            assign_groundwater_values(current, row_groundwater_values(row, description_max_x), value_centers)
+
+    if current is not None:
+        current["Einbauweise"] = normalize_for_compare(current["Einbauweise"])
+        rows.append(current)
+        row_page_ranges.append(current_page_range)
+
+    if not rows:
+        return None
+
+    columns = ["Einbauweise Nummer", "Einbauweise"] + GROUNDWATER_COVER_COLUMNS
+    header_text = " | ".join(columns)
+    return {
+        "label": label,
+        "title": title,
+        "columns": columns,
+        "column_header_text": header_text,
+        "rows": rows,
+        "row_page_ranges": row_page_ranges,
+        "notes": table.get("notes", []),
+        "note_page_ranges": table.get("note_page_ranges", []),
+        "sections": [
+            {
+                "section_label": None,
+                "columns": columns,
+                "column_header_text": header_text,
+                "rows": rows,
+                "row_page_ranges": row_page_ranges,
+                "notes": [],
+                "note_page_ranges": [],
+            }
+        ],
+    }
+
+
 def parse_geometric_material_table(table, block, fitz_word_pages):
     if not fitz_word_pages:
         return None
@@ -1388,7 +1598,9 @@ def add_table_from_block(
         block.get("line_pages"),
         label_override=block.get("label") if block.get("is_implicit_table") else None,
     )
-    geometric_table = parse_geometric_material_table(table, block, fitz_word_pages)
+    geometric_table = parse_geometric_groundwater_table(table, block, fitz_word_pages)
+    if geometric_table is None:
+        geometric_table = parse_geometric_material_table(table, block, fitz_word_pages)
     if geometric_table is not None:
         table = geometric_table
     page_range = block.get("page_range") or annex_unit_obj["page_range"]

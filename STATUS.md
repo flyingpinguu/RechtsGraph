@@ -551,3 +551,23 @@
   - Neo4j count unchanged: 287 nodes, 1123 relationships.
 - Regression run for VersatzV:
   - Content/reference/Cypher outputs rebuilt; table chunk counts unchanged.
+
+### Nested Groundwater Header Tables
+- Added a dedicated geometric parser for Anlage 2 Einbautabellen with nested
+  `Eigenschaft der Grundwasserdeckschicht` headers.
+  - Trigger is narrow: table text must contain `Eigenschaft der
+    Grundwasserdeckschicht`, `Einbauweise`, and `Wasserschutzbereichen`.
+  - Header hierarchy is flattened into stable column names.
+  - The grouped header numbers `4`, `5`, and `6` are still split into separate
+    `Sand` and `Lehm, Schluff, Ton` value columns.
+- Re-ran ErsatzbaustoffV:
+  - Anlage 2 Tabelle 1 now has 17 rows and 11 columns:
+    `Einbauweise Nummer`, `Einbauweise`, and 9 flattened groundwater-condition
+    columns.
+  - All 27 Anlage 2 tables now use the same 11-column structure.
+  - Table row counts range from 1 to 20, reflecting actual table length.
+  - Content graph, reference graph, Cypher export, and local Neo4j import were
+    refreshed.
+  - Neo4j count unchanged: 287 nodes, 1123 relationships.
+- Regression run for VersatzV:
+  - Content/reference/Cypher outputs rebuilt; counts unchanged.
