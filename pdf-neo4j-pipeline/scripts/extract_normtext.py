@@ -540,7 +540,12 @@ def merge_page_ranges(page_ranges):
 
 
 def split_annex_into_chunks(annex):
-    """Split Anlage text into text and explicit table blocks only."""
+    """Split Anlage text into text and table blocks.
+
+    Besides explicit "Tabelle ..." headings, some federal annexes introduce
+    tables only through their column header. Keep the detector narrow so form
+    fields in Musteranlagen do not become legal sections again.
+    """
     if isinstance(annex, dict):
         annex_lines = annex.get("lines", [])
         annex_line_pages = annex.get("line_pages", [annex.get("start_page", 0)] * len(annex_lines))
@@ -551,7 +556,8 @@ def split_annex_into_chunks(annex):
     chunks = []
     current = None
     heading_re = re.compile(r"^(Tabelle\s+\d+[a-z]?\s*:?.*)$")
-    for line, page_idx in zip(annex_lines, annex_line_pages):
+    implicit_table_count = 0
+    for line_idx, (line, page_idx) in enumerate(zip(annex_lines, annex_line_pages)):
         stripped = line.strip()
         match = heading_re.match(stripped)
         if match:
@@ -563,6 +569,21 @@ def split_annex_into_chunks(annex):
                 "chunk_type": "table_block",
                 "lines": [line],
                 "line_pages": [page_idx],
+            }
+            continue
+        if (
+            is_implicit_annex_table_header(annex_lines, line_idx)
+            and (current is None or current.get("chunk_type") != "table_block")
+        ):
+            if current is not None:
+                chunks.append(finalize_annex_chunk(current))
+            implicit_table_count += 1
+            current = {
+                "label": "Tabelle {}".format(implicit_table_count),
+                "chunk_type": "table_block",
+                "lines": [line],
+                "line_pages": [page_idx],
+                "is_implicit_table": True,
             }
             continue
         if current is None:
@@ -580,10 +601,49 @@ def split_annex_into_chunks(annex):
     return [chunk for chunk in chunks if chunk.get("text")]
 
 
+def is_implicit_annex_table_header(lines, index):
+    """Detect table starts where the PDF text has no explicit Tabelle label."""
+    if index >= len(lines):
+        return False
+    first = normalize_for_compare(lines[index])
+    if not first.startswith("Parameter "):
+        return False
+    lookahead = normalize_for_compare(" ".join(lines[index : index + 6]))
+    if first.startswith("Parameter Dimension"):
+        return "Bewertungs" in lookahead and "Norm Normbezeichnung" in lookahead
+    if first.startswith("Parameter Dim."):
+        return "Bestimmungsbereich" in lookahead and "Überschreitung" in lookahead
+    return False
+
+
+def collect_multiline_table_header(lines, header_index):
+    header_parts = [lines[header_index]]
+    header_end_index = header_index
+    first = normalize_for_compare(lines[header_index])
+    if first.startswith("Parameter Dimension"):
+        for idx in range(header_index + 1, min(len(lines), header_index + 6)):
+            header_parts.append(lines[idx])
+            header_end_index = idx
+            if "Normbezeichnung" in normalize_for_compare(lines[idx]):
+                break
+    elif first.startswith("Parameter Dim."):
+        for idx in range(header_index + 1, min(len(lines), header_index + 4)):
+            header_parts.append(lines[idx])
+            header_end_index = idx
+            combined = normalize_for_compare(" ".join(header_parts))
+            if "Überschreitung" in combined and "%" in combined:
+                break
+    return normalize_for_compare(" ".join(header_parts)), header_end_index
+
+
 def infer_table_columns(header_text):
     header = normalize_for_compare(header_text)
     if not header:
         return []
+    if header.startswith("Parameter Dimension") and "Norm Normbezeichnung" in header:
+        return ["Parameter", "Dimension", "Bewertungsrelevanter Bereich", "Norm", "Normbezeichnung"]
+    if header.startswith("Parameter Dim.") and "Überschreitung" in header:
+        return ["Parameter", "Dim.", "Bestimmungsbereich", "zulässige Überschreitung in %"]
     if " Konzentration " in header:
         before, after = header.split(" Konzentration ", 1)
         if before.strip() in ("Anorganische Stoffe", "Organische Stoffe"):
@@ -774,7 +834,7 @@ def split_row_into_cells(row_str, num_columns):
     return [row_str]
 
 
-def parse_table_block(table_text, line_pages=None):
+def parse_table_block(table_text, line_pages=None, label_override=None):
     """Parse a coarse table block into header metadata and row strings.
 
     PDF text extraction does not preserve grid geometry reliably. This parser
@@ -803,27 +863,32 @@ def parse_table_block(table_text, line_pages=None):
             "sections": [],
         }
 
-    label = lines[0]
+    label = label_override or lines[0]
     title_lines = []
-    heading_match = re.match(r"^(Tabelle\s+\d+[a-z]?|Anhang\s+\d+)\s*:?\s*(.*)$", label)
-    if heading_match:
-        label = heading_match.group(1)
-        if heading_match.group(2).strip():
-            title_lines.append(heading_match.group(2).strip())
+    header_search_start = 0 if label_override else 1
+    if not label_override:
+        heading_match = re.match(r"^(Tabelle\s+\d+[a-z]?|Anhang\s+\d+)\s*:?\s*(.*)$", label)
+        if heading_match:
+            label = heading_match.group(1)
+            if heading_match.group(2).strip():
+                title_lines.append(heading_match.group(2).strip())
     header_index = None
     header_keywords = ("Konzentration", "Verfahrenshinweise", "Parameter", "Norm", "Ausgabe")
-    for idx, line in enumerate(lines[1:], start=1):
+    for idx, line in enumerate(lines[header_search_start:], start=header_search_start):
         if any(keyword in line for keyword in header_keywords):
             header_index = idx
             break
         title_lines.append(line)
 
     if header_index is None:
-        header_index = 1 if len(lines) > 1 else 0
+        header_index = header_search_start if len(lines) > header_search_start else 0
         title_lines = []
 
     header_text = lines[header_index] if header_index < len(lines) else ""
-    raw_row_items = line_items[header_index + 1 :]
+    header_end_index = header_index
+    if header_text.startswith("Parameter "):
+        header_text, header_end_index = collect_multiline_table_header(lines, header_index)
+    raw_row_items = line_items[header_end_index + 1 :]
     if is_method_table_header(header_text):
         row_lines, row_page_ranges, note_lines, note_page_ranges = parse_method_table_rows(
             raw_row_items,
@@ -935,7 +1000,11 @@ def add_table_from_block(
     confidence=0.70,
 ):
     table_text = "\n".join(block.get("lines", [])) if block.get("lines") else block["text"]
-    table = parse_table_block(table_text, block.get("line_pages"))
+    table = parse_table_block(
+        table_text,
+        block.get("line_pages"),
+        label_override=block.get("label") if block.get("is_implicit_table") else None,
+    )
     page_range = block.get("page_range") or annex_unit_obj["page_range"]
     table_label = table["label"] or block["label"] or "Tabelle"
     table_global_key = chunk_slug(unit_global_key, table_label)

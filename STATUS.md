@@ -484,9 +484,9 @@
   - Non-table annex content stays in one `annex_text` chunk per annex.
   - Explicit table headings such as `Tabelle 1:` are still converted into
     `table` StructuralUnits with one `table_rows` chunk.
-  - Implicit tables without `Tabelle` heading, e.g. ErsatzbaustoffV Anlage 6,
-    are intentionally left as `annex_text` until a separate implicit-table
-    detector is added.
+  - Implicit tables without `Tabelle` heading are detected only through narrow
+    column-header patterns. This currently covers ErsatzbaustoffV Anlage 5 and
+    Anlage 6.
 - Re-ran ErsatzbaustoffV:
   - Reference graph: 283 nodes, 1119 relationships.
   - Chunk labels: 102 `subsection`, 46 `table_rows`, 8 `annex_text`, 4
@@ -496,3 +496,23 @@
 - Re-ran VersatzV:
   - Reference graph: 38 nodes, 118 relationships.
   - `Chunk_annex_section`: 0; `Chunk_appendix_block`: 0.
+
+### Implicit Annex Table Detection
+- Added implicit table detection in `split_annex_into_chunks`.
+  - Recognized header pattern for Anlage 5:
+    `Parameter Dimension Bewertungsrelevanter Bereich Norm Normbezeichnung`.
+  - Recognized header pattern for Anlage 6:
+    `Parameter Dim. Bestimmungsbereich zulässige Überschreitung in %`.
+  - These produce `table` StructuralUnits and `table_rows` chunks even without
+    an explicit `Tabelle ...` heading.
+- Re-ran ErsatzbaustoffV:
+  - Raw/content/reference/Cypher outputs refreshed.
+  - Reference graph: 287 nodes, 1123 relationships.
+  - Anlage 5 now has `ErsatzbaustoffV Anlage 5 Tabelle 1`, 63 row strings, page
+    range 116-119.
+  - Anlage 6 now has `ErsatzbaustoffV Anlage 6 Tabelle 1`, 32 row strings, page
+    range 119-120.
+  - Chunk labels: 102 `subsection`, 48 `table_rows`, 8 `annex_text`, 4
+    `paragraph_text`, 2 `waste_code_entry`.
+- Regression run for VersatzV:
+  - Still 3 `table_rows`, 4 `annex_text`, 7 `subsection`, 5 `paragraph_text`.
