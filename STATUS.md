@@ -575,8 +575,8 @@
 ### Generalized Nested Symbol Table Detection
 - Refactored the nested-header table handling so detection is geometric rather
   than only keyword-based.
-  - The parser looks for a leaf-number header row and subsequent rows with many
-    symbolic values such as `+`, `–`, `+1`, or `K/M`.
+  - The parser looks for a leaf-number header row and subsequent data rows; it
+    does not depend on the concrete cell values.
   - It derives flattened column paths from the header rows above the leaf
     columns.
   - Known federal groundwater-cover tables still receive a template
@@ -598,6 +598,9 @@
   their actual grid-cell spans before flattening nested column paths.
   - This handles merged header cells such as grouped conditions and leaf
     columns with shared numbers.
+  - Value columns are anchored by grid lines and leaf-number headers, not by
+    the text or symbols inside data cells.
+  - Data-cell contents are collected generically as cell text.
   - It still falls back to word-position heuristics if a PDF page has no
     usable drawn grid lines.
 - Re-ran ErsatzbaustoffV:
@@ -609,3 +612,16 @@
   - Current content graph: 252 nodes, 408 hierarchy/sequence relationships
     before references; reference pass adds 715 `REFERS_TO` relationships and
     35 `ReferenceTarget` nodes.
+
+### Nested Table Values Are Not Structural Triggers
+- Follow-up correction: nested-table value columns are no longer inferred from
+  symbolic cell contents such as plus/minus markers.
+- The parser now derives value-column centers from drawn grid lines at data-row
+  height and uses the leaf-number header row only to attach grouped header
+  numbers to the resulting leaf columns.
+- Data cells are collected as generic text from their grid cells.
+- Re-ran ErsatzbaustoffV:
+  - Anlage 2 Tabelle 1 still has the expected 11 columns and 17 rows.
+  - All 27 Anlage 2 tables retain the expected 11-column structure.
+  - Anlage 1 Tabelle 1 remains 20 columns and 18 merged rows.
+  - Content graph, reference graph, and Cypher export were refreshed.

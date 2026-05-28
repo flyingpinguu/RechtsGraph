@@ -1154,20 +1154,10 @@ def nested_column_number_tokens(row):
     return tokens if tokens == expected else []
 
 
-def row_symbol_table_values(row, min_x=145):
-    value_words = [
-        word for word in row
-        if word[0] > min_x and re.match(r"^(?:[+–-](?:\d+)?|[KM])$", word[4])
-    ]
-    return value_words
-
-
-def infer_symbol_table_value_centers(page_rows, start_idx, end_idx):
-    for row in page_rows[start_idx:end_idx]:
-        value_words = row_symbol_table_values(row, 145)
-        if len(value_words) >= 8:
-            return sorted((word[0] + word[2]) / 2 for word in value_words[:9])
-    return [221.7, 265.9, 304.9, 344.0, 383.0, 422.0, 461.0, 501.0, 543.0]
+def row_center_y(row):
+    if not row:
+        return 0
+    return sum((word[1] + word[3]) / 2 for word in row) / len(row)
 
 
 def group_header_row_words(row, min_x):
@@ -1239,6 +1229,44 @@ def value_indices_for_span(left, right, value_centers, tolerance=1.5):
         idx for idx, center in enumerate(value_centers)
         if left - tolerance <= center <= right + tolerance
     ]
+
+
+def best_data_grid_positions(page_rows, start_idx, end_idx, page_lines):
+    best = []
+    for row in page_rows[start_idx:end_idx]:
+        text = positioned_row_text(row)
+        if not text or PAGE_HEADER_RE.match(text) or row_starts_symbol_table_footnote(row):
+            continue
+        positions = vertical_grid_positions_at_y(page_lines, row_center_y(row))
+        if len(positions) > len(best):
+            best = positions
+    return best
+
+
+def infer_nested_value_layout(page_rows, data_start_idx, page_end_idx, number_row_idx, page_lines):
+    number_words = [
+        word for word in page_rows[number_row_idx]
+        if word[0] > 145 and re.match(r"^\d+$", word[4])
+    ]
+    if not number_words:
+        return [], None
+    first_number_center = min((word[0] + word[2]) / 2 for word in number_words)
+    grid_positions = best_data_grid_positions(page_rows, data_start_idx, page_end_idx, page_lines)
+    if len(grid_positions) >= len(number_words) + 1:
+        left_edges = [position for position in grid_positions if position <= first_number_center]
+        if left_edges:
+            value_left = max(left_edges)
+            value_grid = [position for position in grid_positions if position >= value_left - 1]
+            if len(value_grid) >= 2:
+                centers = [
+                    (left + right) / 2
+                    for left, right in zip(value_grid, value_grid[1:])
+                ]
+                return centers, value_left
+
+    fallback_centers = sorted((word[0] + word[2]) / 2 for word in number_words)
+    fallback_left = fallback_centers[0] - 20 if fallback_centers else None
+    return fallback_centers, fallback_left
 
 
 def cell_span_for_word(word, value_centers, page_lines):
@@ -1470,17 +1498,34 @@ def derive_nested_symbol_columns(
     return row_number_key, row_label_key, value_columns
 
 
-def assign_symbol_values(row_obj, value_words, value_centers, value_columns):
-    for word in value_words:
-        center = (word[0] + word[2]) / 2
-        idx = min(range(len(value_centers)), key=lambda i: abs(value_centers[i] - center))
-        if idx >= len(value_columns) or abs(value_centers[idx] - center) > 28:
+def assign_nested_table_values(row_obj, row, value_centers, value_columns, page_lines, value_left):
+    cell_words = {}
+    for word in sorted(row, key=lambda candidate: (candidate[1], candidate[0])):
+        if word[2] < value_left:
             continue
-        column = value_columns[idx]
-        if row_obj[column]:
-            row_obj[column] = "{} {}".format(row_obj[column], word[4]).strip()
-        else:
-            row_obj[column] = word[4]
+        span = cell_span_for_word(word, value_centers, page_lines) if page_lines else None
+        if span is None:
+            center = (word[0] + word[2]) / 2
+            idx = min(range(len(value_centers)), key=lambda i: abs(value_centers[i] - center))
+            if idx >= len(value_columns) or abs(value_centers[idx] - center) > 28:
+                continue
+            span = (idx, idx)
+        cell_words.setdefault(span, []).append(word)
+
+    for span, words in sorted(cell_words.items(), key=lambda item: (item[0][0], item[0][1])):
+        text = normalize_for_compare(
+            " ".join(word[4] for word in sorted(words, key=lambda candidate: (candidate[1], candidate[0])))
+        )
+        if not text:
+            continue
+        for idx in range(span[0], span[1] + 1):
+            if idx >= len(value_columns):
+                continue
+            column = value_columns[idx]
+            if row_obj[column]:
+                row_obj[column] = "{} {}".format(row_obj[column], text).strip()
+            else:
+                row_obj[column] = text
 
 
 def new_symbol_table_row(number, row_number_key, row_label_key, value_columns, page_number):
@@ -1550,17 +1595,29 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
         if data_start_idx is None:
             continue
 
-        value_centers = infer_symbol_table_value_centers(page_rows, data_start_idx, page_end_idx)
-        symbol_rows = [
-            row for row in page_rows[data_start_idx:page_end_idx]
-            if len(row_symbol_table_values(row, 145)) >= 5
-        ]
-        if len(symbol_rows) < 1:
-            continue
-        description_max_x = value_centers[0] - 20
         page_lines = []
         if fitz_page_lines and page_idx < len(fitz_page_lines):
             page_lines = fitz_page_lines[page_idx]
+        value_centers, value_left = infer_nested_value_layout(
+            page_rows,
+            data_start_idx,
+            page_end_idx,
+            number_row_idx,
+            page_lines,
+        )
+        if len(value_centers) < 3 or value_left is None:
+            continue
+        description_max_x = value_left
+        data_rows = [
+            row for row in page_rows[data_start_idx:page_end_idx]
+            if (
+                row
+                and re.match(r"^\d+$", sorted(row, key=lambda word: word[0])[0][4])
+                and sorted(row, key=lambda word: word[0])[0][0] < description_max_x
+            )
+        ]
+        if len(data_rows) < 1:
+            continue
         row_number_key, row_label_key, value_columns = derive_nested_symbol_columns(
             page_rows,
             page_start_idx,
@@ -1590,9 +1647,10 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
                     value_columns,
                     page_idx + 1,
                 )
+                number_right = first_word[2]
                 description_words = [
                     word[4] for word in sorted(words, key=lambda candidate: (candidate[1], candidate[0]))
-                    if 66 <= word[0] < description_max_x
+                    if number_right < word[0] < description_max_x
                 ]
             else:
                 if current is None:
@@ -1606,11 +1664,13 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
                 current[row_label_key] = normalize_for_compare(
                     "{} {}".format(current[row_label_key], " ".join(description_words))
                 )
-            assign_symbol_values(
+            assign_nested_table_values(
                 current,
-                row_symbol_table_values(row, description_max_x),
+                row,
                 value_centers,
                 value_columns,
+                page_lines,
+                value_left,
             )
 
     if current is not None:
