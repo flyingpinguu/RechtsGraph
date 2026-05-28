@@ -538,3 +538,16 @@
 - Regression run for VersatzV:
   - Counts unchanged: 3 `table_rows`, 4 `annex_text`, 7 `subsection`, 5
     `paragraph_text`.
+
+### Merge Continuation Panels in Wide Tables
+- Updated the geometric material-table parser so continuation panels are merged
+  into the same row when they share `Parameter` and `Dim.`.
+- Re-ran ErsatzbaustoffV:
+  - Anlage 1 Tabelle 1 now has 18 wide rows instead of 36 panel rows.
+  - Example: `pH-Wert1` now contains both the first block (`RC-1` through
+    `GKOS`) and the continuation block (`CUM-1` through `HMVA-2`) in one row.
+  - Content graph, reference graph, Cypher export, and local Neo4j import were
+    refreshed.
+  - Neo4j count unchanged: 287 nodes, 1123 relationships.
+- Regression run for VersatzV:
+  - Content/reference/Cypher outputs rebuilt; table chunk counts unchanged.

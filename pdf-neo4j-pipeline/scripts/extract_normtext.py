@@ -1036,6 +1036,51 @@ def parse_material_panel_rows(page_rows, start_idx, end_idx, columns, centers, p
     return parsed_rows, row_page_ranges
 
 
+def merge_material_panel_sections(sections, all_columns):
+    merged_rows = []
+    merged_page_ranges = []
+    row_index_by_key = {}
+    for section in sections:
+        rows = section.get("rows", [])
+        row_page_ranges = section.get("row_page_ranges", [])
+        for idx, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            key = (
+                normalize_for_compare(row.get("Parameter", "")),
+                normalize_for_compare(row.get("Dim.", "")),
+            )
+            if not key[0]:
+                key = ("__row_{}__".format(len(merged_rows)), "")
+            if key not in row_index_by_key:
+                merged = {column: "" for column in all_columns}
+                for column, value in row.items():
+                    if column in merged:
+                        merged[column] = value
+                row_index_by_key[key] = len(merged_rows)
+                merged_rows.append(merged)
+                merged_page_ranges.append(
+                    row_page_ranges[idx] if idx < len(row_page_ranges) else None
+                )
+                continue
+
+            merged_idx = row_index_by_key[key]
+            merged = merged_rows[merged_idx]
+            for column, value in row.items():
+                if column not in merged or value in (None, ""):
+                    continue
+                current_value = merged.get(column)
+                if not current_value:
+                    merged[column] = value
+                elif current_value != value:
+                    merged[column] = "{} | {}".format(current_value, value)
+            new_page_range = row_page_ranges[idx] if idx < len(row_page_ranges) else None
+            merged_page_ranges[merged_idx] = merge_page_ranges(
+                [merged_page_ranges[merged_idx], new_page_range]
+            )
+    return merged_rows, merged_page_ranges
+
+
 def parse_geometric_material_table(table, block, fitz_word_pages):
     if not fitz_word_pages:
         return None
@@ -1148,20 +1193,26 @@ def parse_geometric_material_table(table, block, fitz_word_pages):
             if column not in seen_columns:
                 seen_columns.add(column)
                 all_columns.append(column)
+    merged_rows, merged_page_ranges = merge_material_panel_sections(sections, all_columns)
+    merged_section = {
+        "section_label": None,
+        "columns": all_columns,
+        "column_header_text": "; ".join(section["column_header_text"] for section in sections),
+        "rows": merged_rows,
+        "row_page_ranges": merged_page_ranges,
+        "notes": [],
+        "note_page_ranges": [],
+    }
     return {
         "label": label,
         "title": title,
         "columns": all_columns,
-        "column_header_text": "; ".join(section["column_header_text"] for section in sections),
-        "rows": [row for section in sections for row in section["rows"]],
-        "row_page_ranges": [
-            page_range
-            for section in sections
-            for page_range in section.get("row_page_ranges", [])
-        ],
+        "column_header_text": merged_section["column_header_text"],
+        "rows": merged_rows,
+        "row_page_ranges": merged_page_ranges,
         "notes": table.get("notes", []),
         "note_page_ranges": table.get("note_page_ranges", []),
-        "sections": sections,
+        "sections": [merged_section],
     }
 
 
