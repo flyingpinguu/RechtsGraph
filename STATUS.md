@@ -445,3 +445,26 @@
   - Chunks: 5 `table_rows`, 0 `table_note`.
   - `REFERS_TO`: 68; statuses: 59 resolved, 9 unresolved, 0 partially
     resolved.
+
+### Complex Reference Chains
+- Incorporated manual edge review findings from Gemini:
+  - External long-name references may omit `der/des`, e.g.
+    `§ 8 Absatz 6 Bundes-Bodenschutz- und Altlastenverordnung`.
+  - External long-name references may carry multiple Absatz targets, e.g.
+    `§ 8 Absatz 1 und 2 der Entsorgungsfachbetriebeverordnung`.
+  - Internal chains may repeat or omit the word `Absatz`, e.g.
+    `§ 9 Absatz 1 und Absatz 3 bis 5` and `§ 9 Absatz 1 und 3 bis 5`.
+- Updated `extract_reference_relations.py`:
+  - Paragraph bodies now include chained Absatz/Qualifier fragments before the
+    target law name.
+  - External law names can be matched with or without `der/des`.
+  - Absatz chains are expanded on the modeled Absatz level.
+  - Mixed references such as `§§ 15, 16 Absatz 1` now resolve to `§ 15` and
+    `§ 16 Absatz 1`.
+- Re-ran ErsatzbaustoffV reference extraction:
+  - Reference graph: 350 nodes, 1253 relationships.
+  - `REFERS_TO`: 715.
+  - Validation checks: 0 invalid level mappings.
+  - Targeted bad-edge checks: 0 hits for the reviewed false internal edges.
+- Re-ran VersatzV reference extraction:
+  - `REFERS_TO`: 68, unchanged.

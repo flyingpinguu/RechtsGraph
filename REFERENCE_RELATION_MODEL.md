@@ -173,6 +173,30 @@ vorhandene Ebene normalisiert. Ein Verweis auf `§ 4 Absatz 1 Satz 2 Nummer 1`
 zeigt also auf `§ 4 Absatz 1`, solange Satz-, Nummer- und Buchstabenebenen
 nicht als eigene Content-Nodes modelliert werden.
 
+Komplexe Absatzketten innerhalb eines Paragraphenverweises werden auf
+Absatzebene expandiert. Beispiele:
+
+```text
+§ 8 Absatz 1 und 2 der Entsorgungsfachbetriebeverordnung
+-> entsorgungsfachbetriebeverordnung_para_8_abs_1
+-> entsorgungsfachbetriebeverordnung_para_8_abs_2
+
+§ 9 Absatz 1 und Absatz 3 bis 5
+-> ..._para_9_abs_1
+-> ..._para_9_abs_3
+-> ..._para_9_abs_4
+-> ..._para_9_abs_5
+```
+
+Bei gemischten Paragraphenketten gilt ein spaeter Absatz-Qualifier fuer den
+letzten genannten Paragraphen:
+
+```text
+§§ 15, 16 Absatz 1
+-> ..._para_15
+-> ..._para_16_abs_1
+```
+
 Tabellenverweise wie `Anlage 4 Tabelle 2` werden nur dann voll aufgeloest,
 wenn die Normtext-Extraktion fuer diese Anlage echte `table`-StructuralUnits
 mit Keys wie `..._anlage_4_tabelle_2` erzeugt. Andernfalls fallen sie auf die

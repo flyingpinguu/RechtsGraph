@@ -27,30 +27,29 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 SCHEMA_VERSION = "0.1.0"
 HSPACE = r"[^\S\r\n]"
 QUALIFIER_PATTERN = r"(?:Abs\.|Absatz|Satz|Nummern?|Nr\.|Buchstabe|Buchst\.)"
+PARA_BODY_PATTERN = (
+    r"\d+[a-z]?"
+    rf"(?:\s*(?:{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+|"
+    rf"(?:und|oder|sowie|,|-|bis)\s*(?:{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+|\d+[a-z]?))){{0,30}}"
+)
+LAW_NAME_PATTERN = r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß0-9\-–\s]{3,100}?"
 
 PARA_EXTERNAL_LONG_RE = re.compile(
-    r"(?P<mention>§{1,2}\s*(?P<body>\d+[a-z]?"
-    rf"(?:\s*{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+)*"
-    r"(?:\s*(?:und|oder|,|-|bis)\s*\d+[a-z]?){0,8})"
-    r"\s+(?P<article>des|der)\s+(?P<law>[A-ZÄÖÜ][A-Za-zÄÖÜäöüß0-9\-– ]{3,100}?"
+    rf"(?P<mention>§{{1,2}}\s*(?P<body>{PARA_BODY_PATTERN})"
+    rf"(?:\s+(?P<article>des|der))?\s+(?P<law>{LAW_NAME_PATTERN}"
     r"(?:gesetzes|verordnung|ordnung|gesetzbuches)))"
 )
 ARTICLE_EXTERNAL_LONG_RE = re.compile(
-    r"(?P<mention>Artikel\s+(?P<body>\d+[a-z]?"
-    rf"(?:\s*{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+)*)"
-    r"\s+(?P<article>des|der)\s+(?P<law>[A-ZÄÖÜ][A-Za-zÄÖÜäöüß0-9\-– ]{3,100}?"
+    rf"(?P<mention>Artikel\s+(?P<body>{PARA_BODY_PATTERN})"
+    rf"\s+(?P<article>des|der)\s+(?P<law>{LAW_NAME_PATTERN}"
     r"(?:gesetzes|verordnung|ordnung|gesetzbuches)))"
 )
 PARA_EXTERNAL_ABBREV_RE = re.compile(
-    r"(?P<mention>§{1,2}\s*(?P<body>\d+[a-z]?"
-    rf"(?:\s*{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+)*"
-    r"(?:\s*(?:und|oder|,|-|bis)\s*\d+[a-z]?){0,8})"
+    rf"(?P<mention>§{{1,2}}\s*(?P<body>{PARA_BODY_PATTERN})"
     r"\s+(?P<abbr>[A-ZÄÖÜ][A-Za-zÄÖÜa-zäöüß0-9]{1,20}(?:G|V|GB|BGB|StGB|VZO))\b)"
 )
 INTERNAL_PARA_RE = re.compile(
-    r"(?P<mention>§{1,2}\s*(?P<body>\d+[a-z]?"
-    rf"(?:\s*{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+)*"
-    r"(?:\s*(?:und|oder|,|-|bis)\s*\d+[a-z]?){0,8}))"
+    rf"(?P<mention>§{{1,2}}\s*(?P<body>{PARA_BODY_PATTERN}))"
 )
 CONTEXTUAL_SUBSECTION_RE = re.compile(
     r"(?P<mention>\b(?:Abs\.|Absatz)\s+(?P<num>\d+[a-z]?)\b)"
@@ -65,6 +64,12 @@ INTERNAL_ANNEX_RE = re.compile(
 
 QUALIFIER_RE = re.compile(
     r"\b(?P<kind>Abs\.|Absatz\b|Satz\b|Nummern?\b|Nr\.|Buchstabe\b|Buchst\.)\s*(?P<num>[A-Za-z0-9]+)"
+)
+ABS_QUALIFIER_RE = re.compile(r"\b(?:Abs\.|Absatz)\s*(?P<num>\d+[a-z]?)\b")
+LOWER_THAN_ABS_RE = re.compile(r"\b(?:Satz|Nummern?|Nr\.|Buchstabe|Buchst\.)\b")
+CONNECTED_NUM_RE = re.compile(
+    r"\b(?P<connector>und|oder|sowie|bis)\s*(?:(?:Abs\.|Absatz)\s*)?(?P<num>\d+[a-z]?)\b|"
+    r"(?P<comma>,|-)\s*(?:(?:Abs\.|Absatz)\s*)?(?P<comma_num>\d+[a-z]?)\b"
 )
 MULTI_NUM_RE = re.compile(r"\d+[a-z]?")
 
@@ -165,11 +170,83 @@ def split_table_body(body: Optional[str]) -> List[str]:
     return MULTI_NUM_RE.findall(cleaned)
 
 
+def expand_number_range(start: str, end: str) -> List[str]:
+    if not (start.isdigit() and end.isdigit()):
+        return [end]
+    left = int(start)
+    right = int(end)
+    if right <= left or right - left > 25:
+        return [end]
+    return [str(number) for number in range(left + 1, right + 1)]
+
+
+def append_unique(values: List[str], value: str) -> None:
+    if value and value not in values:
+        values.append(value)
+
+
+def subsection_numbers_for_body(body: str) -> List[str]:
+    body = re.sub(r"\s+", " ", body or "").strip()
+    matches = list(ABS_QUALIFIER_RE.finditer(body))
+    numbers: List[str] = []
+    for idx, match in enumerate(matches):
+        current = match.group("num")
+        append_unique(numbers, current)
+        next_abs_start = matches[idx + 1].start() if idx + 1 < len(matches) else len(body)
+        lower_match = LOWER_THAN_ABS_RE.search(body, match.end(), next_abs_start)
+        segment_end = lower_match.start() if lower_match else next_abs_start
+        segment = body[match.end():segment_end]
+        last_num = current
+        for continuation in CONNECTED_NUM_RE.finditer(segment):
+            connector = continuation.group("connector") or continuation.group("comma")
+            number = continuation.group("num") or continuation.group("comma_num")
+            if connector in ("bis", "-"):
+                for expanded in expand_number_range(last_num, number):
+                    append_unique(numbers, expanded)
+                last_num = number
+                continue
+            append_unique(numbers, number)
+            last_num = number
+    return numbers
+
+
 def global_key_for_para(document_key: str, para_num: str, qualifiers: List[Tuple[str, str]]) -> str:
     key = "{}_para_{}".format(document_key, slugify(para_num))
     for kind, num in qualifiers:
         key += "_{}_{}".format(kind, slugify(num))
     return key
+
+
+def global_keys_for_para_body(document_key: str, prefix: str, body: str) -> List[str]:
+    para_num, _qualifiers = parse_single_para_body(body)
+    if not para_num:
+        return []
+    if prefix == "para":
+        first_qualifier = QUALIFIER_RE.search(body)
+        paragraph_numbers = (
+            split_para_body(body[: first_qualifier.start()])
+            if first_qualifier
+            else split_para_body(body)
+        )
+        subsection_numbers = subsection_numbers_for_body(body)
+        if subsection_numbers:
+            target_para_num = paragraph_numbers[-1] if paragraph_numbers else para_num
+            plain_para_numbers = paragraph_numbers[:-1]
+            keys = [
+                "{}_para_{}".format(document_key, slugify(number))
+                for number in plain_para_numbers
+            ]
+            keys.extend(
+                "{}_para_{}_abs_{}".format(document_key, slugify(target_para_num), slugify(number))
+                for number in subsection_numbers
+            )
+            return keys
+    if QUALIFIER_RE.search(body):
+        return ["{}_{}_{}".format(document_key, prefix, slugify(para_num))]
+    return [
+        "{}_{}_{}".format(document_key, prefix, slugify(number))
+        for number in split_para_body(body)
+    ]
 
 
 def target_level_from_global_key(global_key: str) -> str:
@@ -647,23 +724,21 @@ class ReferenceExtractor:
             for match in pattern.finditer(text):
                 law_key = normalize_law_name(match.group("law"))
                 body = match.group("body")
-                number, qualifiers = parse_single_para_body(body)
-                if not number:
+                target_keys = global_keys_for_para_body(law_key, prefix, body)
+                if not target_keys:
                     continue
-                target_key = "{}_{}_{}".format(law_key, prefix, slugify(number))
-                for kind, num in qualifiers:
-                    target_key += "_{}_{}".format(kind, slugify(num))
-                self.add_reference(
-                    chunk,
-                    match.group("mention"),
-                    offset + match.start(),
-                    offset + match.end(),
-                    law_key,
-                    target_key,
-                    reference_kind,
-                    "{} {} {}".format(law_key, prefix, body),
-                    target_title_key=law_key,
-                )
+                for target_key in target_keys:
+                    self.add_reference(
+                        chunk,
+                        match.group("mention"),
+                        offset + match.start(),
+                        offset + match.end(),
+                        law_key,
+                        target_key,
+                        reference_kind,
+                        "{} {} {}".format(law_key, prefix, body),
+                        target_title_key=law_key,
+                    )
                 spans.append((match.start(), match.end()))
         return spans
 
@@ -683,21 +758,21 @@ class ReferenceExtractor:
                 continue
             target_document_key = self.document_alias_to_global_key.get(abbr_key, abbr_key)
             body = match.group("body")
-            number, qualifiers = parse_single_para_body(body)
-            if not number:
+            target_keys = global_keys_for_para_body(target_document_key, "para", body)
+            if not target_keys:
                 continue
-            target_key = global_key_for_para(target_document_key, number, qualifiers)
-            self.add_reference(
-                chunk,
-                match.group("mention"),
-                offset + match.start(),
-                offset + match.end(),
-                target_document_key,
-                target_key,
-                "external_abbreviation",
-                "{} para {}".format(target_document_key, body),
-                target_title_key=None,
-            )
+            for target_key in target_keys:
+                self.add_reference(
+                    chunk,
+                    match.group("mention"),
+                    offset + match.start(),
+                    offset + match.end(),
+                    target_document_key,
+                    target_key,
+                    "external_abbreviation",
+                    "{} para {}".format(target_document_key, body),
+                    target_title_key=None,
+                )
             spans.append((match.start(), match.end()))
         return spans
 
@@ -796,15 +871,10 @@ class ReferenceExtractor:
             if self.overlaps(match.start(), match.end(), occupied):
                 continue
             body = match.group("body")
-            numbers = split_para_body(body)
-            if not numbers:
+            target_keys = global_keys_for_para_body(doc_key, "para", body)
+            if not target_keys:
                 continue
-            # If qualifiers exist, attach them only to the first referenced
-            # paragraph; expressions like "§§ 3, 4 und 5" do not carry them.
-            first_num, qualifiers = parse_single_para_body(body)
-            for idx, number in enumerate(numbers):
-                qs = qualifiers if idx == 0 and number == first_num else []
-                target_key = global_key_for_para(doc_key, number, qs)
+            for target_key in target_keys:
                 self.add_reference(
                     chunk,
                     match.group("mention"),
