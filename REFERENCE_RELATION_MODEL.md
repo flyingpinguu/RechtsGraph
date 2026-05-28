@@ -131,11 +131,9 @@ Eine extrahierte Referenz sollte mindestens speichern:
 - `reference_kind`: `internal`, `external_long_name`, `external_abbreviation`
 - `target_document_key`
 - `target_global_key`
-- `target_level`: `document`, `paragraph`, `subsection`, `sentence`,
-  `number`, `letter`, `annex`, `table`, `article`
-- `resolution_status`: `resolved`, `unresolved`, `partially_resolved`,
-  `ambiguous`
-- `nearest_resolved_target_id`, falls nur eine groebere Ebene existiert
+- `target_level`: `document`, `paragraph`, `subsection`, `annex`, `table`,
+  `article`
+- `resolution_status`: `resolved`, `unresolved`, `ambiguous`
 
 ## Graph-Relationen
 
@@ -170,14 +168,19 @@ alle Tabellen- oder Abschnitts-Chunks der Anlage auffaechern. Die breite
 Relation selbst bleibt ueber den StructuralUnit-Rollup erhalten.
 
 Wenn ein Ziel feiner zitiert ist als die vorhandene Struktur, z.B. `Satz 1`
-oder eine nicht modellierte Nummer, kann ein `ReferenceTarget` den exakten
-Zielschluessel halten. `nearest_resolved_target_id` zeigt dann auf die
-naechsthoeher vorhandene Ebene.
+oder eine nicht modellierte Nummer, wird der Verweis auf die naechsthoeher
+vorhandene Ebene normalisiert. Ein Verweis auf `§ 4 Absatz 1 Satz 2 Nummer 1`
+zeigt also auf `§ 4 Absatz 1`, solange Satz-, Nummer- und Buchstabenebenen
+nicht als eigene Content-Nodes modelliert werden.
 
 Tabellenverweise wie `Anlage 4 Tabelle 2` werden nur dann voll aufgeloest,
 wenn die Normtext-Extraktion fuer diese Anlage echte `table`-StructuralUnits
 mit Keys wie `..._anlage_4_tabelle_2` erzeugt. Andernfalls fallen sie auf die
 naechsthoeher vorhandene Anlage zurueck.
+
+Tabellen werden vorerst nicht zeilenweise in mehrere Content-Chunks gesplittet.
+Eine erkannte Tabelle erzeugt eine `table`-StructuralUnit und genau einen
+`table_rows`-Chunk mit dem gesamten extrahierten Tabelleninhalt.
 
 ## Eindeutigkeit
 

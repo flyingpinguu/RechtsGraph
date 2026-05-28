@@ -209,6 +209,14 @@ def strip_to_nearest_keys(global_key: str) -> Iterable[str]:
             break
 
 
+def modeled_target_key(global_key: str) -> str:
+    parts = global_key.split("_")
+    for marker in ("buchst", "nr", "satz"):
+        if marker in parts:
+            return "_".join(parts[: parts.index(marker)])
+    return global_key
+
+
 def text_without_heading(chunk: Dict[str, Any]) -> Tuple[str, int]:
     """Remove a self heading line while preserving reference-rich annex headings."""
     props = chunk["properties"]
@@ -450,11 +458,11 @@ class ReferenceExtractor:
     def resolve_target(self, target_global_key: str) -> Tuple[str, str, Optional[str]]:
         exact = self.global_to_node_id.get(target_global_key)
         if exact:
-            return exact, "resolved", exact
+            return exact, "resolved", target_global_key
         for nearest_key in strip_to_nearest_keys(target_global_key):
             nearest = self.global_to_node_id.get(nearest_key)
             if nearest:
-                return "ref_target_{}".format(slugify(target_global_key)), "partially_resolved", nearest
+                return nearest, "resolved", nearest_key
         return "ref_target_{}".format(slugify(target_global_key)), "unresolved", None
 
     def add_reference(
@@ -469,23 +477,23 @@ class ReferenceExtractor:
         normalized_reference: str,
         target_title_key: Optional[str] = None,
     ) -> None:
+        target_global_key = modeled_target_key(target_global_key)
         source_id = source_chunk["id"]
         source_unit_id = self.source_unit_id_for_chunk(source_chunk)
-        target_id, status, nearest_id = self.resolve_target(target_global_key)
+        target_id, status, resolved_target_global_key = self.resolve_target(target_global_key)
+        effective_target_global_key = resolved_target_global_key or target_global_key
 
         # Skip pure self references introduced by paragraph/table headings.
         if target_id == source_id or target_id == source_unit_id:
             return
-        if nearest_id and nearest_id in (source_id, source_unit_id) and status == "partially_resolved":
-            return
 
-        ref_key = (source_id, target_global_key, mention_text, char_start, char_end)
+        ref_key = (source_id, effective_target_global_key, mention_text, char_start, char_end)
         if ref_key in self.seen_reference_keys:
             return
         self.seen_reference_keys.add(ref_key)
 
         props = {
-            "reference_id": stable_id("ref", source_id, target_global_key, char_start, char_end, mention_text),
+            "reference_id": stable_id("ref", source_id, effective_target_global_key, char_start, char_end, mention_text),
             "source_chunk_id": source_id,
             "source_unit_id": source_unit_id,
             "source_document_id": self.source_document_id_for_chunk(source_chunk),
@@ -493,11 +501,10 @@ class ReferenceExtractor:
             "normalized_reference": normalized_reference,
             "reference_kind": reference_kind,
             "target_document_key": target_document_key,
-            "target_global_key": target_global_key,
+            "target_global_key": effective_target_global_key,
             "target_title_key": target_title_key,
-            "target_level": target_level_from_global_key(target_global_key),
+            "target_level": target_level_from_global_key(effective_target_global_key),
             "resolution_status": status,
-            "nearest_resolved_target_id": nearest_id,
             "char_start": char_start,
             "char_end": char_end,
             "extraction_method": "deterministic_regex_v0.1.0",
@@ -505,11 +512,11 @@ class ReferenceExtractor:
         props = {k: v for k, v in props.items() if v is not None}
 
         if target_id not in self.existing_node_ids:
-            node = reference_target_node(target_global_key, props)
+            node = reference_target_node(effective_target_global_key, props)
             self.reference_targets[node["id"]] = node
             self.existing_node_ids.add(node["id"])
 
-        self.add_refers_to_relationships(source_chunk, target_id, nearest_id, props)
+        self.add_refers_to_relationships(source_chunk, target_id, None, props)
 
     def add_relationship_once(self, rel_type: str, start_id: str, end_id: str, props: Dict[str, Any]) -> None:
         if start_id == end_id:

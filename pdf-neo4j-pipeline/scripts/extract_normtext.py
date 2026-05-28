@@ -56,8 +56,6 @@ PAGE_HEADER_RE = re.compile(
     r"-\s*Seite\s+\d+\s+von\s+\d+\s*-)$"
 )
 SPLIT_TABLE_SECTIONS_AS_UNITS = False
-TABLE_ROWS_PER_CHUNK = 40
-TABLE_NOTES_PER_CHUNK = 10
 
 
 # ---------------------------------------------------------------------------
@@ -927,12 +925,6 @@ def parse_table_block(table_text, line_pages=None):
     }
 
 
-def chunk_rows(rows, size):
-    for start in range(0, len(rows), size):
-        end = min(start + size, len(rows))
-        yield start + 1, end, rows[start:end]
-
-
 def add_table_from_block(
     structural_units,
     chunks,
@@ -1045,103 +1037,50 @@ def add_table_from_block(
         }
         structural_units.append(table_unit)
 
-        multi_section_unit = len(spec["sections"]) > 1
-        for section_idx, section in enumerate(spec["sections"], start=1):
-            section_label = section.get("section_label")
-            section_slug = chunk_slug(section_label) if multi_section_unit and section_label else None
-            section_citation_part = " {}".format(section_label) if multi_section_unit and section_label else ""
-            row_page_ranges = section.get("row_page_ranges", [])
-            for row_start, row_end, row_lines in chunk_rows(section["rows"], TABLE_ROWS_PER_CHUNK):
-                chunk_page_range = merge_page_ranges(row_page_ranges[row_start - 1:row_end]) or unit_page_range
-                chunk_page_id = pages[chunk_page_range["start"] - 1]["page_id"]
-                chunk_global_key = chunk_slug(spec["global_key"], section_slug, "rows", row_start, row_end)
-                chunk_id = "chunk_{}".format(chunk_global_key)
-                chunk_citation = "{}{} Zeilen {}-{}".format(
-                    spec["citation"],
-                    section_citation_part,
-                    row_start,
-                    row_end,
-                )
-                header = section["column_header_text"]
-                columns = section["columns"]
-                chunk_text = "Spalten: {}\n{}".format(
-                    " | ".join(columns) if columns else header,
-                    "\n".join(" | ".join(cells) if isinstance(cells, list) else str(cells) for cells in row_lines),
-                ).strip()
-                chunks.append(
-                    {
-                        "chunk_id": chunk_id,
-                        "global_key": chunk_global_key,
-                        "legal_citation": chunk_citation,
-                        "display_name": chunk_citation,
-                        "chunk_type": "table_rows",
-                        "unit_id": table_unit_id,
-                        "document_global_key": document_global_key,
-                        "parent_chunk_id": None,
-                        "child_chunk_ids": [],
-                        "label": "{}rows_{}_{}".format(
-                            "{}_".format(section_slug) if section_slug else "",
-                            row_start,
-                            row_end,
-                        ),
-                        "number": None,
-                        "sequence": (section_idx * 1000) + row_start,
-                        "page_id": chunk_page_id,
-                        "page_range": chunk_page_range,
-                        "row_range": {"start": row_start, "end": row_end},
-                        "table_section": section_label,
-                        "columns": columns,
-                        "column_header_text": header,
-                        "rows": row_lines,
-                        "text": chunk_text,
-                        "text_sha256": sha256_str(chunk_text),
-                        "confidence": confidence,
-                        "review_status": "pending",
-                    }
-                )
-
-            note_page_ranges = section.get("note_page_ranges", [])
-            for note_start, note_end, note_lines in chunk_rows(section["notes"], TABLE_NOTES_PER_CHUNK):
-                chunk_page_range = merge_page_ranges(note_page_ranges[note_start - 1:note_end]) or unit_page_range
-                chunk_page_id = pages[chunk_page_range["start"] - 1]["page_id"]
-                chunk_global_key = chunk_slug(spec["global_key"], section_slug, "notes", note_start, note_end)
-                chunk_id = "chunk_{}".format(chunk_global_key)
-                chunk_citation = "{}{} Hinweise {}-{}".format(
-                    spec["citation"],
-                    section_citation_part,
-                    note_start,
-                    note_end,
-                )
-                chunk_text = "\n".join(note_lines).strip()
-                if not chunk_text:
-                    continue
-                chunks.append(
-                    {
-                        "chunk_id": chunk_id,
-                        "global_key": chunk_global_key,
-                        "legal_citation": chunk_citation,
-                        "display_name": chunk_citation,
-                        "chunk_type": "table_note",
-                        "unit_id": table_unit_id,
-                        "document_global_key": document_global_key,
-                        "parent_chunk_id": None,
-                        "child_chunk_ids": [],
-                        "label": "{}notes_{}_{}".format(
-                            "{}_".format(section_slug) if section_slug else "",
-                            note_start,
-                            note_end,
-                        ),
-                        "number": None,
-                        "sequence": (section_idx * 1000) + 500 + note_start,
-                        "page_id": chunk_page_id,
-                        "page_range": chunk_page_range,
-                        "table_section": section_label,
-                        "text": chunk_text,
-                        "text_sha256": sha256_str(chunk_text),
-                        "confidence": confidence,
-                        "review_status": "pending",
-                    }
-                )
+        all_rows = [
+            row
+            for section in spec["sections"]
+            for row in section.get("rows", [])
+        ]
+        all_page_ranges = [
+            page_range
+            for section in spec["sections"]
+            for page_range in (
+                section.get("row_page_ranges", []) + section.get("note_page_ranges", [])
+            )
+        ]
+        chunk_page_range = merge_page_ranges(all_page_ranges) or unit_page_range
+        chunk_page_id = pages[chunk_page_range["start"] - 1]["page_id"]
+        chunk_global_key = chunk_slug(spec["global_key"], "rows")
+        chunk_id = "chunk_{}".format(chunk_global_key)
+        chunk_text = table_text.strip()
+        chunk_obj = {
+            "chunk_id": chunk_id,
+            "global_key": chunk_global_key,
+            "legal_citation": spec["citation"],
+            "display_name": spec["citation"],
+            "chunk_type": "table_rows",
+            "unit_id": table_unit_id,
+            "document_global_key": document_global_key,
+            "parent_chunk_id": None,
+            "child_chunk_ids": [],
+            "label": "rows",
+            "number": None,
+            "sequence": 1,
+            "page_id": chunk_page_id,
+            "page_range": chunk_page_range,
+            "columns": spec["columns"],
+            "column_header_text": spec["column_header_text"],
+            "table_section": "; ".join(spec["table_sections"]) if spec["table_sections"] else None,
+            "rows": all_rows,
+            "text": chunk_text,
+            "text_sha256": sha256_str(chunk_text),
+            "confidence": confidence,
+            "review_status": "pending",
+        }
+        if unit_row_count:
+            chunk_obj["row_range"] = {"start": 1, "end": unit_row_count}
+        chunks.append(chunk_obj)
 
 
 # ---------------------------------------------------------------------------

@@ -423,3 +423,25 @@
   - StructuralUnits include 5 `table` units.
   - `REFERS_TO`: 62.
   - Reference level validation: 0 invalid level mappings.
+
+### Simpler Table/Reference Model
+- Updated table chunking: every detected table now produces exactly one
+  `table_rows` chunk containing the whole table text. Table notes are no longer
+  exported as separate chunks.
+- Updated reference resolution: references to unmodeled fine levels
+  (`Satz`, `Nummer`, `Buchstabe`) are normalized to the nearest modeled target
+  level, typically paragraph or subsection. The pipeline no longer emits
+  `partially_resolved` for these cases.
+- Re-ran ErsatzbaustoffV:
+  - Reference graph: 341 nodes, 1164 relationships.
+  - StructuralUnits: 46 table units.
+  - Chunks: 46 `table_rows`, 0 `table_note`.
+  - `REFERS_TO`: 626; statuses: 548 resolved, 78 unresolved, 0 partially
+    resolved.
+  - Target levels now exclude sentence/number/letter.
+- Re-ran VersatzV:
+  - Reference graph: 74 nodes, 187 relationships.
+  - StructuralUnits: 5 table units.
+  - Chunks: 5 `table_rows`, 0 `table_note`.
+  - `REFERS_TO`: 68; statuses: 59 resolved, 9 unresolved, 0 partially
+    resolved.
