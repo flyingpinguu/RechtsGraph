@@ -129,6 +129,24 @@ Der Referenz-Export ergänzt deterministisch erkannte Normverweise als
 zusaetzlich StructuralUnit- und Document-Level-Relationen abgeleitet. Nicht
 vorhandene Ziele werden als `ReferenceTarget`-Placeholder angelegt.
 
+## Mehrdokument-Merge
+
+Mehrere Dokumente werden zuerst einzeln bis zum Content-Graph extrahiert, dann
+zu einem gemeinsamen Content-Graph gemergt und erst danach durch die
+Referenz-Extraktion geschickt. Dadurch koennen externe Verweise direkt auf
+vorhandene Nodes geschlossen werden, sobald das Zielgesetz im Merge enthalten
+ist.
+
+```bash
+./.venv/bin/python scripts/merge_content_graphs.py \
+  --input output/multi_doc/content_graphs/*.json \
+  --output output/multi_doc/merged/merged_content_graph.json
+
+./.venv/bin/python scripts/extract_reference_relations.py \
+  --input output/multi_doc/merged/merged_content_graph.json \
+  --output output/multi_doc/merged/merged_content_graph_with_refs.json
+```
+
 ## Neo4j-Cypher-Export
 
 ```bash

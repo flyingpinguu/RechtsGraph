@@ -39,7 +39,7 @@ SUBSECTION_GROUP_RE = re.compile(
     re.IGNORECASE,
 )
 PARA_REFERENCE_TAIL_RE = re.compile(
-    r"^(?:Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.|§|und|oder|,)",
+    r"^(?:Abs\.|Absatz\b|Satz\b|Nummern?\b|Nr\.|Buchstabe\b|Buchst\.|§|und\b|oder\b|,)",
     re.IGNORECASE,
 )
 ANNEX_REFERENCE_TAIL_RE = re.compile(
@@ -51,7 +51,9 @@ LIST_ITEM_RE = re.compile(r"^\s*((?:\d+[a-z]?|[a-z])[\.)])\s+(.+)$")
 AVV_WASTE_RE = re.compile(r"^(\d{2}\s\d{2}(?:\s\d{2})?\*?)\s+(.+)$")
 PAGE_HEADER_RE = re.compile(
     r"^(?:Ein Service des Bundesministeriums der Justiz.*gesetze-im-internet\.de|"
+    r"Ein Service des Bundesministerium der Justiz.*|"
     r"Ein Service des Bundesministeriums der Justiz sowie des Bundesamts für|"
+    r"sowie des Bundesamts für Justiz.*gesetze-im-internet\.de|"
     r"Justiz\s+.+www\.gesetze-im-internet\.de|"
     r"-\s*Seite\s+\d+\s+von\s+\d+\s*-)$"
 )
@@ -310,7 +312,18 @@ def match_para_heading(stripped):
     tail = (match.group(2) or "").strip()
     if tail and PARA_REFERENCE_TAIL_RE.match(tail):
         return None
+    if tail and tail[0].islower():
+        return None
     return match
+
+
+def is_allowed_annex_lowercase_tail(tail):
+    normalized = normalize_for_compare(tail)
+    return (
+        normalized.startswith("(zu ")
+        or normalized.startswith("zu §")
+        or normalized.startswith("zu den §")
+    )
 
 
 def match_annex_heading(stripped):
@@ -320,7 +333,9 @@ def match_annex_heading(stripped):
     tail = (match.group(2) or "").strip()
     if tail and ANNEX_REFERENCE_TAIL_RE.match(tail):
         return None
-    if tail and tail[0].islower() and not tail.startswith("zu "):
+    if tail and tail[0].islower() and not is_allowed_annex_lowercase_tail(tail):
+        return None
+    if tail.startswith("zu ") and not is_allowed_annex_lowercase_tail(tail):
         return None
     return match
 
@@ -372,12 +387,28 @@ def looks_like_real_unit_start(stream, index):
     return True
 
 
+def first_real_unit_start_index(stream):
+    for index, (_page_idx, line) in enumerate(stream):
+        match = match_para_heading(clean_line(line))
+        if not match:
+            continue
+        if paragraph_number(match.group(1)) == "1" and looks_like_real_unit_start(stream, index):
+            return index
+    for index, (_page_idx, _line) in enumerate(stream):
+        if looks_like_real_unit_start(stream, index):
+            return index
+    return None
+
+
 def filtered_document_lines(page_text_map):
     """Return document lines with the table of contents removed."""
     stream = document_line_stream(page_text_map)
     filtered = []
     in_toc = False
+    body_start_index = first_real_unit_start_index(stream)
     for index, (page_idx, line) in enumerate(stream):
+        if body_start_index is not None and index < body_start_index:
+            continue
         stripped = clean_line(line)
         if stripped.startswith("Inhaltsübersicht") or stripped.startswith("Inhaltsuebersicht"):
             in_toc = True
@@ -405,10 +436,13 @@ def detect_paras_across_pages(page_text_map):
     results = []
     current = None
     in_annexes = False
+    seen_paragraph = False
 
     for page_idx, line in filtered_document_lines(page_text_map):
         stripped = clean_line(line)
         if match_annex_heading(stripped):
+            if not seen_paragraph:
+                continue
             if current is not None:
                 current["text"] = "\n".join(current["lines"]).strip()
                 results.append(current)
@@ -420,6 +454,7 @@ def detect_paras_across_pages(page_text_map):
 
         m = match_para_heading(stripped)
         if m:
+            seen_paragraph = True
             if current is not None:
                 current["text"] = "\n".join(current["lines"]).strip()
                 results.append(current)
@@ -447,11 +482,16 @@ def detect_annexes_across_pages(page_text_map):
     """Return Anlage blocks as structural units."""
     results = []
     current = None
+    seen_paragraph = False
 
     for page_idx, line in filtered_document_lines(page_text_map):
         stripped = clean_line(line)
+        if match_para_heading(stripped):
+            seen_paragraph = True
         m = match_annex_heading(stripped)
         if m:
+            if not seen_paragraph:
+                continue
             if current is not None:
                 current["text"] = "\n".join(current["lines"]).strip()
                 results.append(current)

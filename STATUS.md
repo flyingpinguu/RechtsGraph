@@ -646,3 +646,22 @@
   - VersatzV was re-extracted and its three simple tables still validate.
 - Refreshed raw JSON, content graph, reference graph, and Cypher exports for
   ErsatzbaustoffV and VersatzV.
+
+### Four-Document Merge Trial
+- Added `scripts/merge_content_graphs.py` to merge per-document Content-Graph
+  JSONs before reference extraction.
+- Hardened norm heading detection:
+  - Front-matter/TOC lines before the first plausible real `§ 1` are skipped.
+  - Paragraph titles such as `Satzung ...` are no longer mistaken for `Satz`
+    reference fragments.
+  - Annex references such as `Anlage 3 zu entsprechen` are not treated as real
+    annex headings.
+- Re-ran four documents: ErsatzbaustoffV, KrWG, DepV, EfbV.
+  - Merged content graph: 4 documents, 893 nodes, 1,525 hierarchy/sequence
+    relationships.
+  - After reference extraction: 1,031 nodes, 4,244 relationships, including
+    2,719 `REFERS_TO` relationships.
+  - Merge closed 216 relationship-level references that were unresolved in
+    single-document runs, corresponding to 66 unique textual reference mentions.
+  - Remaining unresolved references: 464 `REFERS_TO` relationships, represented
+    by 138 `ReferenceTarget` placeholder nodes.
