@@ -56,6 +56,7 @@ PAGE_HEADER_RE = re.compile(
     r"-\s*Seite\s+\d+\s+von\s+\d+\s*-)$"
 )
 SPLIT_TABLE_SECTIONS_AS_UNITS = False
+NESTED_TABLE_ROW_MARKER_RE = re.compile(r"^(?:\d+[a-z]?|[A-ZÄÖÜ]{1,6}\d+[a-z]?)$")
 
 
 # ---------------------------------------------------------------------------
@@ -1146,6 +1147,10 @@ def row_starts_symbol_table_footnote(row):
     return bool(re.match(r"^\d+$", first)) and rest.startswith(("Zulässig", "Zugelassen", "Nicht zugelassen"))
 
 
+def is_nested_table_row_marker(text):
+    return bool(NESTED_TABLE_ROW_MARKER_RE.match(text or ""))
+
+
 def nested_column_number_tokens(row):
     tokens = [word[4] for word in row if word[0] > 145 and re.match(r"^\d+$", word[4])]
     if len(tokens) < 3:
@@ -1243,6 +1248,17 @@ def best_data_grid_positions(page_rows, start_idx, end_idx, page_lines):
     return best
 
 
+def row_inside_value_grid(row, value_left, value_centers, page_lines):
+    if not page_lines:
+        return True
+    positions = vertical_grid_positions_at_y(page_lines, row_center_y(row))
+    if not positions:
+        return False
+    if not any(abs(position - value_left) <= 2 for position in positions):
+        return False
+    return len([position for position in positions if position >= value_left - 1]) >= len(value_centers) + 1
+
+
 def infer_nested_value_layout(page_rows, data_start_idx, page_end_idx, number_row_idx, page_lines):
     number_words = [
         word for word in page_rows[number_row_idx]
@@ -1262,11 +1278,13 @@ def infer_nested_value_layout(page_rows, data_start_idx, page_end_idx, number_ro
                     (left + right) / 2
                     for left, right in zip(value_grid, value_grid[1:])
                 ]
-                return centers, value_left
+                marker_boundaries = [position for position in grid_positions if position < value_left - 1]
+                marker_right = marker_boundaries[1] if len(marker_boundaries) > 1 else value_left
+                return centers, value_left, marker_right
 
     fallback_centers = sorted((word[0] + word[2]) / 2 for word in number_words)
     fallback_left = fallback_centers[0] - 20 if fallback_centers else None
-    return fallback_centers, fallback_left
+    return fallback_centers, fallback_left, fallback_left
 
 
 def cell_span_for_word(word, value_centers, page_lines):
@@ -1424,6 +1442,27 @@ def detect_row_header_label(header_rows, description_max_x):
     return candidates[-1] if candidates else "Zeile"
 
 
+def header_assignment_is_full_span(labels_by_center):
+    nonempty = [tuple(labels) for labels in labels_by_center if labels]
+    return len(nonempty) == len(labels_by_center) and len(set(nonempty)) == 1
+
+
+def trim_leading_full_span_header_rows(header_assignments):
+    first_split_idx = None
+    for idx, labels_by_center in enumerate(header_assignments):
+        if any(labels_by_center) and not header_assignment_is_full_span(labels_by_center):
+            first_split_idx = idx
+            break
+    if first_split_idx is None:
+        return header_assignments
+    keep_from = 0
+    for idx in range(first_split_idx - 1, -1, -1):
+        if header_assignment_is_full_span(header_assignments[idx]):
+            keep_from = idx
+            break
+    return header_assignments[keep_from:]
+
+
 def derive_nested_symbol_columns(
     page_rows,
     page_start_idx,
@@ -1438,6 +1477,7 @@ def derive_nested_symbol_columns(
     paths = [[] for _center in value_centers]
     normalized_title = normalize_for_compare(title or "")
     title_identity = normalize_header_identity(title or "")
+    prepared_assignments = []
 
     for row in header_rows:
         text = positioned_row_text(row)
@@ -1453,7 +1493,6 @@ def derive_nested_symbol_columns(
             continue
         if normalize_for_compare(text) == row_label:
             continue
-        labels_by_center = []
         if page_lines:
             labels_by_center = header_cell_assignments_from_grid(
                 row,
@@ -1461,15 +1500,23 @@ def derive_nested_symbol_columns(
                 description_max_x,
                 page_lines,
             )
-        if not any(labels_by_center):
+            if not any(labels_by_center):
+                continue
+            prepared_assignments.append(labels_by_center)
+        else:
             groups = group_header_row_words(row, description_max_x)
             labels_by_center = assign_header_groups_to_centers_with_paths(
                 groups,
                 value_centers,
                 paths,
             )
-        for center_idx, labels in enumerate(labels_by_center):
-            paths[center_idx].extend(labels)
+            for center_idx, labels in enumerate(labels_by_center):
+                paths[center_idx].extend(labels)
+
+    if page_lines:
+        for labels_by_center in trim_leading_full_span_header_rows(prepared_assignments):
+            for center_idx, labels in enumerate(labels_by_center):
+                paths[center_idx].extend(labels)
 
     number_words = [
         word for word in page_rows[number_row_idx]
@@ -1598,7 +1645,7 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
         page_lines = []
         if fitz_page_lines and page_idx < len(fitz_page_lines):
             page_lines = fitz_page_lines[page_idx]
-        value_centers, value_left = infer_nested_value_layout(
+        value_centers, value_left, marker_right = infer_nested_value_layout(
             page_rows,
             data_start_idx,
             page_end_idx,
@@ -1612,8 +1659,9 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
             row for row in page_rows[data_start_idx:page_end_idx]
             if (
                 row
-                and re.match(r"^\d+$", sorted(row, key=lambda word: word[0])[0][4])
-                and sorted(row, key=lambda word: word[0])[0][0] < description_max_x
+                and is_nested_table_row_marker(sorted(row, key=lambda word: word[0])[0][4])
+                and sorted(row, key=lambda word: word[0])[0][0] < marker_right + 2
+                and row_inside_value_grid(row, value_left, value_centers, page_lines)
             )
         ]
         if len(data_rows) < 1:
@@ -1630,11 +1678,15 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
         for row in page_rows[data_start_idx:page_end_idx]:
             if PAGE_HEADER_RE.match(positioned_row_text(row)) or row_starts_symbol_table_footnote(row):
                 continue
+            if not row_inside_value_grid(row, value_left, value_centers, page_lines):
+                if current is not None:
+                    break
+                continue
             words = sorted(row, key=lambda word: word[0])
             if not words:
                 continue
             first_word = words[0]
-            starts_new = first_word[0] < 66 and re.match(r"^\d+$", first_word[4])
+            starts_new = first_word[0] < marker_right + 2 and is_nested_table_row_marker(first_word[4])
             if starts_new:
                 if current is not None:
                     current[row_label_key] = normalize_for_compare(current[row_label_key])

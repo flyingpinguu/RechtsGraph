@@ -55,6 +55,35 @@ Shard-Seitenmodell:
 
 Das alte doppelte Feld `pages` wird nicht mehr geschrieben.
 
+## Tabellen-Validierung
+
+Nach jeder Änderung am Tabellenparser zuerst die Roh-Extraktion neu erzeugen
+und dann die erwarteten Tabellenformen prüfen:
+
+```bash
+./.venv/bin/python scripts/validate_table_shapes.py \
+  --input output/raw_ersatzbaustoffv_current.json \
+  --contains 'Anlage 3 Tabelle' \
+  --expect-columns 11 \
+  --expect-rows 26 \
+  --row-marker-regex '^B[0-9]+$'
+```
+
+Weitere schnelle Regressionen:
+
+```bash
+./.venv/bin/python scripts/validate_table_shapes.py \
+  --input output/raw_ersatzbaustoffv_current.json \
+  --contains 'Anlage 2 Tabelle' \
+  --expect-columns 11
+
+./.venv/bin/python scripts/validate_table_shapes.py \
+  --input output/raw_ersatzbaustoffv_current.json \
+  --contains 'Anlage 1 Tabelle 1' \
+  --expect-columns 20 \
+  --expect-rows 18
+```
+
 ## Modellierungsentscheidung
 
 Das kanonische Modell bleibt flach:

@@ -625,3 +625,24 @@
   - All 27 Anlage 2 tables retain the expected 11-column structure.
   - Anlage 1 Tabelle 1 remains 20 columns and 18 merged rows.
   - Content graph, reference graph, and Cypher export were refreshed.
+
+### Anlage 3 Nested Railway Tables
+- Fixed nested table extraction for ErsatzbaustoffV Anlage 3.
+  - Cause: Anlage 3 rows use alphanumeric row codes such as `B1` through `B26`,
+    while the parser previously only started new rows for purely numeric row
+    markers.
+  - Additional issue: continuation text such as `E 1` could be mistaken for a
+    new numeric row unless the row marker is constrained to the left code cell.
+  - The parser now infers the row-code cell from the drawn grid and accepts
+    numeric or alphanumeric row markers only inside that cell.
+  - It also ignores leading full-span title rows before the actual nested
+    column header and stops parsing when rows leave the active table grid.
+- Added `scripts/validate_table_shapes.py` for iterative table QA.
+  - ErsatzbaustoffV Anlage 3 validation:
+    `13` tables, each `11` columns, `26` rows, first marker `B1`, last marker
+    `B26`.
+  - Regression checks passed for ErsatzbaustoffV Anlage 2 (`27` tables with
+    `11` columns) and Anlage 1 Tabelle 1 (`20` columns, `18` rows).
+  - VersatzV was re-extracted and its three simple tables still validate.
+- Refreshed raw JSON, content graph, reference graph, and Cypher exports for
+  ErsatzbaustoffV and VersatzV.
