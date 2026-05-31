@@ -34,6 +34,36 @@ Die Haupt-JSON speichert keine Seitentexte direkt. Seiten liegen ausgelagert
 unter `output/pages/<document_key>/page_XXX.json`; das Dokument enthaelt nur
 `page_refs` und eine textfreie `pages`-Kompatibilitaetsliste.
 
+`scripts/extract_normtext.py` ist nur noch ein Kompatibilitaets-Wrapper. Die
+importierbare Logik liegt unter `normtext_extractor/`; Tabellen laufen über
+eine Parser-Registry in `normtext_extractor/table_parsers.py`. Neue Tabellen-
+Edge-Cases sollen dort als strukturelle Parser ergänzt werden, nicht als
+weitere Spezialzweige im CLI-Skript.
+
+Optionale Source-Text-Anomaly-Regeln koennen extern geladen werden:
+
+```bash
+./.venv/bin/python scripts/extract_normtext.py \
+  --output output/raw_doc.json \
+  --rules-dir rules \
+  ../abfall_pdfs/09_VersatzV.pdf
+```
+
+Regeldateien sind JSON-Dateien mit `source_text_anomaly_patterns`. Ohne
+`--rules-dir` werden keine dokumentspezifischen Anomaly-Regeln geladen.
+
+## Tests
+
+```bash
+./.venv/bin/python -m pytest
+```
+
+Die Tests laufen gegen temporaere Outputs und prüfen unter anderem:
+
+- Tabellenformen in ErsatzbaustoffV Anlagen 1 bis 3.
+- Keine doppelten Node-/Relationship-IDs in KrWG, DepV und EfbV.
+- Vier-Dokumente-Merge, Referenzextraktion und Cypher-Export.
+
 ## Review-Shards
 
 ```bash
