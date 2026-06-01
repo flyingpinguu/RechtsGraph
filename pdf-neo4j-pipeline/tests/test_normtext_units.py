@@ -2,9 +2,16 @@ import inspect
 
 from normtext_extractor.pipeline import (
     column_bounds_from_centers,
+    collect_multiline_table_header,
+    detect_row_header_label,
+    infer_table_columns,
     is_material_class_header_row,
     is_material_header_continuation,
+    is_table_note_start,
+    is_table_section_header,
+    looks_like_table_header_line,
     material_table_stop_row,
+    parse_table_block,
     parse_geometric_material_table,
     parse_material_panel_rows,
     match_annex_heading,
@@ -65,5 +72,37 @@ def test_multi_panel_parser_core_avoids_document_specific_keywords():
         "Organische Stoffe",
         "Stoffspezifischer",
         "In Gebieten",
+    )
+    assert not any(keyword in source for keyword in forbidden)
+
+
+def test_table_parsing_core_has_no_known_content_keywords():
+    source = "\n".join(
+        inspect.getsource(obj)
+        for obj in (
+            looks_like_table_header_line,
+            collect_multiline_table_header,
+            infer_table_columns,
+            is_table_section_header,
+            is_table_note_start,
+            detect_row_header_label,
+            parse_table_block,
+        )
+    )
+    forbidden = (
+        "pH-Wert",
+        "Cyanid",
+        "Blei",
+        "PAK",
+        "DIN",
+        "ISO",
+        "HPLC",
+        "AAS",
+        "Untersuchungsparameter",
+        "Parameter Dimension",
+        "Überschreitung",
+        "Anorganische Stoffe",
+        "Organische Stoffe",
+        "Einbauweise",
     )
     assert not any(keyword in source for keyword in forbidden)

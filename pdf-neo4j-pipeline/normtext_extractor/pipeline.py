@@ -646,6 +646,10 @@ def split_annex_into_chunks(annex):
     chunks = []
     current = None
     heading_re = re.compile(r"^(Tabelle\s+\d+[a-z]?\s*:?.*)$")
+    has_explicit_table_heading = any(
+        heading_re.match(line.strip())
+        for line in annex_lines
+    )
     implicit_table_count = 0
     for line_idx, (line, page_idx) in enumerate(zip(annex_lines, annex_line_pages)):
         stripped = line.strip()
@@ -662,6 +666,8 @@ def split_annex_into_chunks(annex):
             }
             continue
         if (
+            not has_explicit_table_heading
+            and
             is_implicit_annex_table_header(annex_lines, line_idx)
             and (current is None or current.get("chunk_type") != "table_block")
         ):
@@ -695,73 +701,69 @@ def is_implicit_annex_table_header(lines, index):
     """Detect table starts where the PDF text has no explicit Tabelle label."""
     if index >= len(lines):
         return False
-    first = normalize_for_compare(lines[index])
-    if not first.startswith("Parameter "):
+    if not looks_like_table_header_line(lines[index]):
         return False
-    lookahead = normalize_for_compare(" ".join(lines[index : index + 6]))
-    if first.startswith("Parameter Dimension"):
-        return "Bewertungs" in lookahead and "Norm Normbezeichnung" in lookahead
-    if first.startswith("Parameter Dim."):
-        return "Bestimmungsbereich" in lookahead and "Überschreitung" in lookahead
-    return False
+    lookahead = [normalize_for_compare(line) for line in lines[index + 1 : index + 8]]
+    row_like = [
+        line for line in lookahead
+        if line and not looks_like_table_header_line(line) and re.search(r"\d|[<>=%]", line)
+    ]
+    return len(row_like) >= 2
 
 
 def collect_multiline_table_header(lines, header_index):
     header_parts = [lines[header_index]]
     header_end_index = header_index
-    first = normalize_for_compare(lines[header_index])
-    if first.startswith("Parameter Dimension"):
-        for idx in range(header_index + 1, min(len(lines), header_index + 6)):
-            header_parts.append(lines[idx])
-            header_end_index = idx
-            if "Normbezeichnung" in normalize_for_compare(lines[idx]):
-                break
-    elif first.startswith("Parameter Dim."):
-        for idx in range(header_index + 1, min(len(lines), header_index + 4)):
-            header_parts.append(lines[idx])
-            header_end_index = idx
-            combined = normalize_for_compare(" ".join(header_parts))
-            if "Überschreitung" in combined and "%" in combined:
-                break
+    for idx in range(header_index + 1, min(len(lines), header_index + 6)):
+        candidate = normalize_for_compare(lines[idx])
+        if not candidate:
+            continue
+        if re.search(r"\d|[<>=%]", candidate):
+            break
+        if not looks_like_table_header_line(candidate):
+            break
+        header_parts.append(lines[idx])
+        header_end_index = idx
     return normalize_for_compare(" ".join(header_parts)), header_end_index
+
+
+def looks_like_table_header_line(line):
+    normalized = normalize_for_compare(line)
+    if not normalized:
+        return False
+    if re.match(r"^(?:Fortsetzung\s+)?Tabelle\s+\d+[a-z]?:", normalized):
+        return False
+    if re.match(r"^\(?\d", normalized):
+        return False
+    if normalized.endswith((".", ";")):
+        return False
+    spaced_cells = [part for part in re.split(r"\s{2,}", normalized) if part.strip()]
+    if len(spaced_cells) >= 2:
+        return True
+    tokens = normalized.split()
+    return 2 <= len(tokens) <= 10 and not re.search(r"\d|[<>=%]", normalized)
 
 
 def infer_table_columns(header_text):
     header = normalize_for_compare(header_text)
     if not header:
         return []
-    if header.startswith("Parameter Dimension") and "Norm Normbezeichnung" in header:
-        return ["Parameter", "Dimension", "Bewertungsrelevanter Bereich", "Norm", "Normbezeichnung"]
-    if header.startswith("Parameter Dim.") and "Überschreitung" in header:
-        return ["Parameter", "Dim.", "Bestimmungsbereich", "zulässige Überschreitung in %"]
-    if " Konzentration " in header:
-        before, after = header.split(" Konzentration ", 1)
-        if before.strip() in ("Anorganische Stoffe", "Organische Stoffe"):
-            before = "Stoff/Parameter"
-        return [before.strip(), "Konzentration {}".format(after).strip()]
-    if header.startswith("Untersuchungsparameter "):
-        return ["Untersuchungsparameter", "Verfahrenshinweise", "Norm", "Ausgabe der Norm"]
     parts = [part.strip() for part in re.split(r"\s{2,}", header) if part.strip()]
-    return parts or [header]
-
-
-def concentration_section_label(header_text):
-    header = normalize_for_compare(header_text)
-    if " Konzentration " not in header:
-        return None
-    before = header.split(" Konzentration ", 1)[0].strip()
-    if before in ("Anorganische Stoffe", "Organische Stoffe"):
-        return before
-    return None
+    if len(parts) >= 2:
+        return parts
+    tokens = header.split()
+    if 2 <= len(tokens) <= 10:
+        return tokens
+    return [header]
 
 
 def is_table_section_header(line):
     normalized = normalize_for_compare(line)
-    if " Konzentration " not in normalized:
+    if not normalized or re.search(r"\d|[<>=%]", normalized):
         return False
-    if re.search(r"\d+(?:[,.]\d+)?", normalized):
-        return False
-    return concentration_section_label(normalized) is not None
+    if looks_like_table_header_line(normalized):
+        return True
+    return 1 <= len(normalized.split()) <= 6 and not normalized.endswith((".", ";", ","))
 
 
 def is_table_note_start(line):
@@ -769,144 +771,9 @@ def is_table_note_start(line):
     return (
         normalized == "-----"
         or re.match(r"^\d+\)\s", normalized)
-        or normalized.startswith("Für Salzbelastung")
-        or normalized.startswith("Der pH-Wert")
-        or normalized.startswith("nicht überschreiten")
-        or normalized.startswith("ISO-Normen")
+        or re.match(r"^[*]+(?:\s|$)", normalized)
+        or re.match(r"^[a-z]\)\s", normalized)
     )
-
-
-def is_method_table_header(header_text):
-    return normalize_for_compare(header_text).startswith("Untersuchungsparameter ")
-
-
-def method_row_starts():
-    return (
-        "pH-Wert",
-        "Trockenrückstand",
-        "Cyanid, gesamt",
-        "Cyanid, leicht freisetzbar",
-        "Arsen",
-        "Blei",
-        "Cadmium",
-        "Chrom",
-        "Chrom, gesamt",
-        "Chromat",
-        "Kupfer",
-        "Nickel",
-        "Zink",
-        "Quecksilber",
-        "Mineralölkohlenwasserstoffe",
-        "Leichtflüchtige",
-        "Benzol und Derivate",
-        "BTEX",
-        "Polycyclische aromatische",
-        "PAK, gesamt",
-        "Naphthalin",
-        "Polychlorierte Biphenyle",
-        "PCB, gesamt",
-        "TOC",
-        "Glühverlust",
-        "Elektrische Leitfähigkeit",
-        "Gesamttrockenrückstand",
-        "für alle Elemente",
-    )
-
-
-def is_method_row_start(line):
-    normalized = normalize_for_compare(line)
-    for start in method_row_starts():
-        if re.match(r"^{}(?:$|[\s:])".format(re.escape(start)), normalized):
-            return True
-    return False
-
-
-def split_embedded_method_rows(line):
-    """Split PDF extraction joins such as '... 1981Cyanid, leicht ...'."""
-    parts = [line]
-    for marker in method_row_starts():
-        next_parts = []
-        for part in parts:
-            idx = part.find(marker)
-            if idx > 0 and re.search(r"\d{4}$", part[:idx].strip()):
-                next_parts.append(part[:idx].strip())
-                next_parts.append(part[idx:].strip())
-            else:
-                next_parts.append(part)
-        parts = next_parts
-    return parts
-
-
-def method_row_has_method(row_lines):
-    text = normalize_for_compare(" ".join(row_lines))
-    method_markers = (
-        "DIN ",
-        "DIN-",
-        "ISO",
-        "Merkblatt",
-        "Gaschromatographie",
-        "AAS",
-        "ICP",
-        "HPLC",
-        "GC-",
-        "GC/",
-        "Elementaranalyse",
-        "Wasserbeschaffenheit",
-        "Bodenbeschaffenheit",
-        "Deutsche Einheitsverfahren",
-    )
-    return any(marker in text for marker in method_markers)
-
-
-def parse_method_table_rows(raw_row_items, header_text):
-    rows = []
-    row_page_ranges = []
-    notes = []
-    note_page_ranges = []
-    current = []
-    current_pages = []
-    in_notes = False
-    normalized_header = normalize_for_compare(header_text)
-
-    split_lines = []
-    for line, page_number in raw_row_items:
-        for split_line in split_embedded_method_rows(line):
-            split_lines.append((split_line, page_number))
-
-    for line, page_number in split_lines:
-        normalized = normalize_for_compare(line)
-        if not normalized:
-            continue
-        if normalized == normalized_header:
-            continue
-        if is_table_note_start(line):
-            in_notes = True
-        if in_notes:
-            if current:
-                rows.append(" ".join(current).strip())
-                row_page_ranges.append(merge_page_ranges(current_pages))
-                current = []
-                current_pages = []
-            notes.append(line)
-            note_page_ranges.append(page_range_from_page(page_number))
-            continue
-        if is_method_row_start(line) and current and method_row_has_method(current):
-            rows.append(" ".join(current).strip())
-            row_page_ranges.append(merge_page_ranges(current_pages))
-            current = [line]
-            current_pages = [page_range_from_page(page_number)]
-            continue
-        if current:
-            current.append(line)
-            current_pages.append(page_range_from_page(page_number))
-        else:
-            current = [line]
-            current_pages = [page_range_from_page(page_number)]
-
-    if current:
-        rows.append(" ".join(current).strip())
-        row_page_ranges.append(merge_page_ranges(current_pages))
-    return rows, row_page_ranges, notes, note_page_ranges
 def split_row_into_cells(row_str, num_columns):
     # Try splitting by 2 or more spaces first
     cells = [c.strip() for c in re.split(r"\s{2,}", row_str) if c.strip()]
@@ -1478,8 +1345,6 @@ def detect_row_header_label(header_rows, description_max_x):
         )
         if left_text and not re.fullmatch(r"\d+(?:\s+\d+)*", left_text):
             candidates.append(left_text)
-    if "Einbauweise" in candidates:
-        return "Einbauweise"
     return candidates[-1] if candidates else "Zeile"
 
 
@@ -1577,12 +1442,8 @@ def derive_nested_symbol_columns(
         else:
             value_columns.append("Wert {}".format(idx))
 
-    if row_label == "Einbauweise":
-        row_number_key = "Einbauweise Nummer"
-        row_label_key = "Einbauweise"
-    else:
-        row_number_key = "{} Nummer".format(row_label)
-        row_label_key = row_label
+    row_number_key = "{} Nummer".format(row_label)
+    row_label_key = row_label
     return row_number_key, row_label_key, value_columns
 
 
@@ -1986,41 +1847,13 @@ def parse_table_block(table_text, line_pages=None, label_override=None):
 
     header_text = lines[header_index] if header_index < len(lines) else ""
     header_end_index = header_index
-    if header_text.startswith("Parameter "):
+    if looks_like_table_header_line(header_text):
         header_text, header_end_index = collect_multiline_table_header(lines, header_index)
     raw_row_items = line_items[header_end_index + 1 :]
-    if is_method_table_header(header_text):
-        row_lines, row_page_ranges, note_lines, note_page_ranges = parse_method_table_rows(
-            raw_row_items,
-            header_text,
-        )
-        columns = infer_table_columns(header_text)
-        num_columns = len(columns)
-        parsed_rows = [split_row_into_cells(r, num_columns) for r in row_lines]
-        section = {
-            "section_label": None,
-            "columns": columns,
-            "column_header_text": header_text,
-            "rows": parsed_rows,
-            "row_page_ranges": row_page_ranges,
-            "notes": note_lines,
-            "note_page_ranges": note_page_ranges,
-        }
-        return {
-            "label": label,
-            "title": " ".join(title_lines).strip() or None,
-            "columns": infer_table_columns(header_text),
-            "column_header_text": header_text,
-            "rows": row_lines,
-            "row_page_ranges": row_page_ranges,
-            "notes": note_lines,
-            "note_page_ranges": note_page_ranges,
-            "sections": [section],
-        }
 
     sections = [
         {
-            "section_label": concentration_section_label(header_text),
+            "section_label": None,
             "columns": infer_table_columns(header_text),
             "column_header_text": header_text,
             "rows": [],
@@ -2037,7 +1870,7 @@ def parse_table_block(table_text, line_pages=None, label_override=None):
             continue
         if is_table_section_header(normalized):
             current_section = {
-                "section_label": concentration_section_label(normalized),
+                "section_label": normalized,
                 "columns": infer_table_columns(normalized),
                 "column_header_text": normalized,
                 "rows": [],
@@ -2053,8 +1886,6 @@ def parse_table_block(table_text, line_pages=None, label_override=None):
         if in_notes:
             current_section["notes"].append(line)
             current_section["note_page_ranges"].append(page_range_from_page(page_number))
-            continue
-        if " Konzentration " in normalized and not re.search(r"\d+(?:[,.]\d+)?", normalized):
             continue
         current_section["rows"].append(line)
         current_section["row_page_ranges"].append(page_range_from_page(page_number))
