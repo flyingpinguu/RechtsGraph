@@ -1,5 +1,12 @@
+import inspect
+
 from normtext_extractor.pipeline import (
     column_bounds_from_centers,
+    is_material_class_header_row,
+    is_material_header_continuation,
+    material_table_stop_row,
+    parse_geometric_material_table,
+    parse_material_panel_rows,
     match_annex_heading,
     match_para_heading,
     slugify,
@@ -34,3 +41,29 @@ def test_table_parser_registry_has_text_fallback():
     parsed = default_table_parser_registry().parse_first(context)
     assert parsed["label"] == "Tabelle 1"
     assert parsed["parser_name"] == "text_fallback"
+
+
+def test_multi_panel_parser_core_avoids_document_specific_keywords():
+    source = "\n".join(
+        inspect.getsource(obj)
+        for obj in (
+            is_material_class_header_row,
+            is_material_header_continuation,
+            material_table_stop_row,
+            parse_material_panel_rows,
+            parse_geometric_material_table,
+        )
+    )
+    forbidden = (
+        "Materialwerte",
+        "RC-",
+        "HOS-",
+        "SWS-",
+        "HMVA-",
+        "GKOS",
+        "Anorganische Stoffe",
+        "Organische Stoffe",
+        "Stoffspezifischer",
+        "In Gebieten",
+    )
+    assert not any(keyword in source for keyword in forbidden)

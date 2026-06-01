@@ -946,25 +946,10 @@ def positioned_row_text(row):
     return normalize_for_compare(" ".join(word[4] for word in row))
 
 
-def is_material_class_header_row(row):
-    text = positioned_row_text(row)
-    class_markers = (
-        "RC-",
-        "HOS-",
-        "SWS-",
-        "CUM-",
-        "HMVA-",
-        "BM-",
-        "BG-",
-        "GS-",
-        "SKG",
-        "SKA",
-        "SFA",
-        "BFA",
-        "GKOS",
-        "GRS",
-    )
-    return text.startswith(("MEB ", "BM ", "BG ", "GS ")) and sum(1 for marker in class_markers if marker in text) >= 2
+def is_material_class_header_row(row, parameter_dim_row=None):
+    if parameter_dim_row is None:
+        return False
+    return material_header_columns(row, parameter_dim_row) is not None
 
 
 def row_contains_parameter_dim(row):
@@ -982,10 +967,10 @@ def row_dim_center(row):
 def is_material_header_continuation(row, dim_center):
     if dim_center is None or not row:
         return False
-    if any((word[0] + word[2]) / 2 <= dim_center + 8 for word in row):
+    centers = [(word[0] + word[2]) / 2 for word in row]
+    if any(center <= dim_center + 8 for center in centers):
         return False
-    text = positioned_row_text(row)
-    return any(marker in text for marker in ("BG-", "BM-", "GS-", "RC-", "SWS-", "HOS-", "HMVA-"))
+    return len(centers) >= 2 and max(centers) - min(centers) > 20
 
 
 def material_header_columns(header_row, parameter_dim_row=None, continuation_row=None):
@@ -1027,7 +1012,16 @@ def material_header_columns(header_row, parameter_dim_row=None, continuation_row
     return columns, centers
 
 
-def material_table_stop_row(row):
+def row_inside_wide_value_grid(row, centers, page_lines):
+    if not page_lines or not centers:
+        return True
+    positions = vertical_grid_positions_at_y(page_lines, row_center_y(row))
+    if len(positions) < 2:
+        return False
+    return positions[0] <= centers[0] + 2 and positions[-1] >= centers[-1] - 2
+
+
+def material_table_stop_row(row, centers=None, page_lines=None):
     text = positioned_row_text(row)
     if not text:
         return True
@@ -1035,7 +1029,9 @@ def material_table_stop_row(row):
         return True
     if re.match(r"^(?:Fortsetzung\s+)?Tabelle\s+\d+[a-z]?:", text):
         return True
-    if re.match(r"^\d+\s+", text) and any(marker in text for marker in ("Nur ", "Stoffspezifischer", "PAK", "In Gebieten")):
+    if re.match(r"^\d+\)\s", text):
+        return True
+    if page_lines and centers and not row_inside_wide_value_grid(row, centers, page_lines):
         return True
     return False
 
@@ -1069,10 +1065,10 @@ def material_cells_to_row(columns, cells):
 def is_material_section_label(cells):
     if not cells:
         return False
-    return cells[0] in ("Anorganische Stoffe", "Organische Stoffe") and not any(cells[1:])
+    return bool(cells[0]) and not any(cells[1:]) and not re.search(r"\d", cells[0])
 
 
-def parse_material_panel_rows(page_rows, start_idx, end_idx, columns, centers, page_number):
+def parse_material_panel_rows(page_rows, start_idx, end_idx, columns, centers, page_number, page_lines=None):
     boundaries = [-float("inf")]
     for left, right in zip(centers, centers[1:]):
         boundaries.append((left + right) / 2)
@@ -1083,10 +1079,12 @@ def parse_material_panel_rows(page_rows, start_idx, end_idx, columns, centers, p
     current = None
     current_page_range = None
     for row in page_rows[start_idx:end_idx]:
-        if material_table_stop_row(row) or is_material_class_header_row(row) or row_contains_parameter_dim(row):
-            break
-        if positioned_row_text(row) in ("Anorganische Stoffe", "Organische Stoffe"):
+        if material_table_stop_row(row, centers, page_lines):
+            if current is not None:
+                break
             continue
+        if row_contains_parameter_dim(row):
+            break
         cells = material_table_row_to_cells(row, boundaries)
         if not any(cells):
             continue
@@ -1801,17 +1799,15 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
     }
 
 
-def parse_geometric_material_table(table, block, fitz_word_pages):
+def parse_geometric_material_table(table, block, fitz_word_pages, fitz_page_lines=None):
     if not fitz_word_pages:
-        return None
-    title = table.get("title") or ""
-    if "Materialwerte" not in title:
         return None
     line_pages = [page for page in block.get("line_pages", []) if page is not None]
     if not line_pages:
         return None
 
     label = table.get("label") or block.get("label") or "Tabelle"
+    title = table.get("title")
     table_number_match = re.search(r"\d+[a-z]?", label)
     table_number = table_number_match.group(0) if table_number_match else None
     first_page_idx = min(line_pages)
@@ -1821,6 +1817,9 @@ def parse_geometric_material_table(table, block, fitz_word_pages):
         if page_idx < 0 or page_idx >= len(fitz_word_pages):
             continue
         page_rows = group_positioned_words_into_rows(fitz_word_pages[page_idx])
+        page_lines = []
+        if fitz_page_lines and page_idx < len(fitz_page_lines):
+            page_lines = fitz_page_lines[page_idx]
         target_label_rows = []
         different_label_rows = []
         for idx, row in enumerate(page_rows):
@@ -1844,8 +1843,8 @@ def parse_geometric_material_table(table, block, fitz_word_pages):
                 continue
             header = None
             data_start_idx = None
-            if is_material_class_header_row(row):
-                if row_idx + 1 >= len(page_rows) or not row_contains_parameter_dim(page_rows[row_idx + 1]):
+            if row_idx + 1 < page_end_idx and row_contains_parameter_dim(page_rows[row_idx + 1]):
+                if not is_material_class_header_row(row, page_rows[row_idx + 1]):
                     continue
                 header = material_header_columns(row, page_rows[row_idx + 1])
                 data_start_idx = row_idx + 2
@@ -1875,9 +1874,7 @@ def parse_geometric_material_table(table, block, fitz_word_pages):
                     if next_number != table_number:
                         end_idx = next_idx
                         break
-                if re.match(r"^\d+\s+", next_text) and any(
-                    marker in next_text for marker in ("Nur ", "Stoffspezifischer", "PAK", "In Gebieten")
-                ):
+                if material_table_stop_row(page_rows[next_idx], centers, page_lines):
                     end_idx = next_idx
                     break
 
@@ -1888,6 +1885,7 @@ def parse_geometric_material_table(table, block, fitz_word_pages):
                 columns,
                 centers,
                 page_idx + 1,
+                page_lines,
             )
             if rows:
                 section_label = " ".join(columns[2:])

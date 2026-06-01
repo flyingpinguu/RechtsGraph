@@ -81,6 +81,7 @@ class MultiPanelContinuationTableParser:
             context.table,
             context.block,
             context.fitz_word_pages,
+            context.fitz_page_lines,
         )
 
 
