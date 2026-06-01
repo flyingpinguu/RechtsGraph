@@ -629,7 +629,7 @@ def merge_page_ranges(page_ranges):
     }
 
 
-def split_annex_into_chunks(annex):
+def split_annex_into_chunks(annex, fitz_word_pages=None, fitz_page_lines=None):
     """Split Anlage text into text and table blocks.
 
     Besides explicit "Tabelle ..." headings, some federal annexes introduce
@@ -669,6 +669,13 @@ def split_annex_into_chunks(annex):
             not has_explicit_table_heading
             and
             is_implicit_annex_table_header(annex_lines, line_idx)
+            and implicit_annex_table_has_grid_geometry(
+                annex_lines,
+                annex_line_pages,
+                line_idx,
+                fitz_word_pages,
+                fitz_page_lines,
+            )
             and (current is None or current.get("chunk_type") != "table_block")
         ):
             if current is not None:
@@ -713,6 +720,32 @@ def has_following_table_rows(lines, index, window=7):
         if line and not looks_like_table_header_line(line) and re.search(r"\d|[<>=%]", line)
     ]
     return len(row_like) >= 2
+
+
+def implicit_annex_table_has_grid_geometry(lines, line_pages, index, fitz_word_pages=None, fitz_page_lines=None):
+    if not fitz_word_pages or not fitz_page_lines or index >= len(line_pages):
+        return True
+    page_idx = line_pages[index]
+    if page_idx is None or page_idx < 0 or page_idx >= len(fitz_word_pages) or page_idx >= len(fitz_page_lines):
+        return False
+    page_rows = group_positioned_words_into_rows([word[:5] for word in fitz_word_pages[page_idx]])
+    page_lines = fitz_page_lines[page_idx]
+    start_idx = find_matching_row_index(page_rows, [lines[index]]) or 0
+    compatible_runs = []
+    for row in page_rows[start_idx:start_idx + 10]:
+        text = positioned_row_text(row)
+        if not text or PAGE_HEADER_RE.match(text):
+            continue
+        positions = vertical_grid_positions_at_y(page_lines, row_center_y(row))
+        if len(positions) < 4:
+            continue
+        if not compatible_runs or compatible_grid_positions(positions, compatible_runs[-1][0]):
+            compatible_runs.append((positions, 1 if not compatible_runs else compatible_runs[-1][1] + 1))
+        else:
+            compatible_runs.append((positions, 1))
+        if compatible_runs[-1][1] >= 3:
+            return True
+    return False
 
 
 def collect_multiline_table_header(lines, header_index):
@@ -1121,6 +1154,153 @@ def horizontal_grid_boundaries_for_positions(page_lines, positions, y_min, y_max
         if min_x <= left + 2 and max_x >= right - 2:
             boundaries.append(y)
     return sorted(set(boundaries))
+
+
+def extend_boundaries_with_vertical_bottom(boundaries, page_lines, positions):
+    if not boundaries or not page_lines or not positions:
+        return boundaries
+    last_boundary = boundaries[-1]
+    bottoms = []
+    for position in positions:
+        segments = sorted(
+            (
+                (line.get("y0", 0), line.get("y1", 0))
+                for line in page_lines
+                if (
+                    line.get("orientation") == "vertical"
+                    and abs(line.get("x", 0) - position) <= 1.5
+                    and line.get("y1", 0) > last_boundary + 2
+                )
+            ),
+            key=lambda item: item[0],
+        )
+        current_bottom = last_boundary
+        for y0, y1 in segments:
+            if y0 > current_bottom + 2:
+                continue
+            current_bottom = max(current_bottom, y1)
+        if current_bottom <= last_boundary + 2:
+            return boundaries
+        bottoms.append(current_bottom)
+    bottom = round(min(bottoms), 1)
+    if bottom > last_boundary + 2:
+        return sorted(set(boundaries + [bottom]))
+    return boundaries
+
+
+def partial_grid_boundaries_for_positions(page_lines, positions, y0, y1):
+    if not page_lines or len(positions) < 3:
+        return [], None
+    left = positions[0]
+    right = positions[-1]
+    grouped = {}
+    for line in page_lines:
+        if line.get("orientation") != "horizontal":
+            continue
+        y = line.get("y")
+        if y is None or y <= y0 + 1 or y >= y1 - 1:
+            continue
+        if line.get("x0", 0) > left + 2:
+            continue
+        if line.get("x1", 0) >= right - 2:
+            continue
+        if line.get("x1", 0) < positions[min(2, len(positions) - 1)] - 2:
+            continue
+        grouped.setdefault(round(float(y), 1), []).append(line)
+    boundaries = []
+    split_rights = []
+    for y, spans in grouped.items():
+        min_x = min(span.get("x0", 0) for span in spans)
+        max_x = max(span.get("x1", 0) for span in spans)
+        if min_x <= left + 2 and max_x < right - 2:
+            boundaries.append(y)
+            split_rights.append(max_x)
+    if not boundaries:
+        return [], None
+    return sorted(set(boundaries)), max(split_rights)
+
+
+def split_grid_band_rows(page_rows, page_lines, positions, y0, y1):
+    full_cells = cells_for_grid_band(page_rows, positions, y0, y1)
+    boundaries, split_right = partial_grid_boundaries_for_positions(page_lines, positions, y0, y1)
+    if not boundaries or split_right is None:
+        text_split_rows = split_grid_band_by_left_text_rows(page_rows, positions, y0, y1, full_cells)
+        return text_split_rows or [full_cells]
+    split_column_idx = 0
+    for idx in range(len(positions) - 1):
+        if positions[idx + 1] <= split_right + 2:
+            split_column_idx = idx + 1
+    sub_bounds = [y0] + boundaries + [y1]
+    split_rows = []
+    for sub_y0, sub_y1 in zip(sub_bounds, sub_bounds[1:]):
+        sub_cells = cells_for_grid_band(page_rows, positions, sub_y0, sub_y1)
+        if grid_cells_are_empty(sub_cells):
+            continue
+        merged_cells = []
+        for idx, cell in enumerate(sub_cells):
+            if idx >= split_column_idx and full_cells[idx]:
+                merged_cells.append(full_cells[idx])
+            else:
+                merged_cells.append(cell)
+        split_rows.append(merged_cells)
+    return split_rows or [full_cells]
+
+
+def infer_rowspan_copy_start(positions):
+    widths = [right - left for left, right in zip(positions, positions[1:])]
+    if len(widths) < 4:
+        return len(widths)
+    median_width = sorted(widths)[len(widths) // 2]
+    if median_width > 0 and widths[-1] >= median_width * 1.8:
+        return max(1, len(widths) - 2)
+    return len(widths)
+
+
+def cells_for_single_grid_row(row, positions):
+    cells = [[] for _ in range(len(positions) - 1)]
+    for word in sorted(row, key=lambda item: item[0]):
+        x0, _word_y0, x1, _word_y1, text = word[:5]
+        center_x = (x0 + x1) / 2
+        if center_x < positions[0] - 1 or center_x > positions[-1] + 1:
+            continue
+        for idx in range(len(positions) - 1):
+            if positions[idx] - 0.75 <= center_x < positions[idx + 1] + 0.75:
+                cells[idx].append(text)
+                break
+    return [normalize_for_compare(" ".join(cell)) for cell in cells]
+
+
+def split_grid_band_by_left_text_rows(page_rows, positions, y0, y1, full_cells):
+    copy_start = infer_rowspan_copy_start(positions)
+    if copy_start >= len(full_cells):
+        return None
+    candidate_rows = []
+    for row in page_rows:
+        center_y = row_center_y(row)
+        if center_y < y0 - 0.75 or center_y > y1 + 0.75:
+            continue
+        cells = cells_for_single_grid_row(row, positions)
+        if cells and cells[0] and any(cells[:copy_start]):
+            candidate_rows.append(cells)
+    if len(candidate_rows) < 2:
+        return None
+
+    sparse_prefix_columns = set()
+    for idx in range(copy_start):
+        non_empty_count = sum(1 for row in candidate_rows if row[idx])
+        if 0 < non_empty_count <= max(1, len(candidate_rows) // 2):
+            sparse_prefix_columns.add(idx)
+
+    split_rows = []
+    for cells in candidate_rows:
+        merged = list(cells)
+        for idx, full_cell in enumerate(full_cells):
+            if idx >= copy_start and full_cell:
+                merged[idx] = full_cell
+            elif idx in sparse_prefix_columns and not merged[idx] and full_cell:
+                merged[idx] = full_cell
+        split_rows.append(merged)
+    return split_rows
 
 
 def cells_for_grid_band(page_rows, positions, y0, y1):
@@ -1559,7 +1739,7 @@ def parse_geometric_grid_table(table, block, fitz_word_pages, fitz_page_lines=No
         if page_idx < 0 or page_idx >= len(fitz_word_pages):
             continue
         page_words = [word[:5] for word in fitz_word_pages[page_idx]]
-        page_rows = group_positioned_words_into_rows(page_words)
+        page_rows = group_positioned_words_into_rows(page_words, y_tolerance=3.0)
         page_lines = fitz_page_lines[page_idx] if page_idx < len(fitz_page_lines) else []
         start_idx, end_idx = page_row_bounds_for_block(
             block,
@@ -1595,37 +1775,39 @@ def parse_geometric_grid_table(table, block, fitz_word_pages, fitz_page_lines=No
             min(page_centers) - 25,
             max(page_centers) + 30,
         )
+        boundaries = extend_boundaries_with_vertical_bottom(boundaries, page_lines, selected_positions)
         if len(boundaries) < 2:
             continue
 
         parsed_any_grid = True
         for band_idx, (y0, y1) in enumerate(zip(boundaries, boundaries[1:])):
-            cells = cells_for_grid_band(page_rows, selected_positions, y0, y1)
-            if grid_cells_are_empty(cells):
-                continue
-            if columns is None:
-                columns = grid_columns_from_cells(cells)
-                header_text = " | ".join(columns)
-                continue
-            if band_idx == 0 and grid_cells_are_header_repeat(cells, columns):
-                continue
-            if len(cells) != len(columns):
-                continue
+            band_rows = split_grid_band_rows(page_rows, page_lines, selected_positions, y0, y1)
+            for cells in band_rows:
+                if grid_cells_are_empty(cells):
+                    continue
+                if columns is None:
+                    columns = grid_columns_from_cells(cells)
+                    header_text = " | ".join(columns)
+                    continue
+                if band_idx == 0 and grid_cells_are_header_repeat(cells, columns):
+                    continue
+                if len(cells) != len(columns):
+                    continue
 
-            key_width = min(2, len(cells))
-            has_key = any(cells[:key_width])
-            current_has_key = bool(current and any(current[:key_width]))
-            if current is None:
+                key_width = min(2, len(cells))
+                has_key = any(cells[:key_width])
+                current_has_key = bool(current and any(current[:key_width]))
+                if current is None:
+                    current = cells
+                    current_page_ranges = [page_range_from_page(page_idx + 1)]
+                    continue
+                if not has_key or not current_has_key:
+                    append_grid_cells(current, cells)
+                    current_page_ranges.append(page_range_from_page(page_idx + 1))
+                    continue
+                flush_current()
                 current = cells
                 current_page_ranges = [page_range_from_page(page_idx + 1)]
-                continue
-            if not has_key or not current_has_key:
-                append_grid_cells(current, cells)
-                current_page_ranges.append(page_range_from_page(page_idx + 1))
-                continue
-            flush_current()
-            current = cells
-            current_page_ranges = [page_range_from_page(page_idx + 1)]
 
     flush_current()
 
@@ -2676,7 +2858,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None, rule_s
         }
         structural_units.append(unit_obj)
 
-        annex_chunks = split_annex_into_chunks(annex)
+        annex_chunks = split_annex_into_chunks(annex, fitz_word_pages, fitz_page_lines)
         for chunk_idx, annex_chunk in enumerate(annex_chunks):
             if annex_chunk["chunk_type"] == "table_block":
                 add_table_from_block(

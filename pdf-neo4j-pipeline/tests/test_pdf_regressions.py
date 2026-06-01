@@ -140,7 +140,18 @@ def test_ersatzbaustoffv_table_regressions(regression_outputs):
         "Norm",
         "Normbezeichnung",
     ]
-    assert len(anlage_5_table_1[0]["rows"]) >= 20
+    assert len(anlage_5_table_1[0]["rows"]) >= 50
+    assert any(row.get("Parameter") == "Atrazin" for row in anlage_5_table_1[0]["rows"])
+    assert any(row.get("Parameter") == "Bromacil" for row in anlage_5_table_1[0]["rows"])
+    assert any(row.get("Parameter") == "Diuron" for row in anlage_5_table_1[0]["rows"])
+    assert any(row.get("Parameter") == "Simazin" for row in anlage_5_table_1[0]["rows"])
+    assert any(row.get("Parameter") == "Dimefuron" for row in anlage_5_table_1[0]["rows"])
+    assert not [
+        chunk
+        for chunk in table_chunks(payload)
+        if "Anlage 7" in (chunk.get("legal_citation") or "")
+        or "Anlage 8" in (chunk.get("legal_citation") or "")
+    ]
 
     anlage_2 = matching_tables(payload, "Anlage 2 Tabelle")
     assert len(anlage_2) == 27
