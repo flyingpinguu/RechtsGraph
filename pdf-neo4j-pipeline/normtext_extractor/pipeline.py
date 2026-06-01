@@ -703,7 +703,11 @@ def is_implicit_annex_table_header(lines, index):
         return False
     if not looks_like_table_header_line(lines[index]):
         return False
-    lookahead = [normalize_for_compare(line) for line in lines[index + 1 : index + 8]]
+    return has_following_table_rows(lines, index)
+
+
+def has_following_table_rows(lines, index, window=7):
+    lookahead = [normalize_for_compare(line) for line in lines[index + 1 : index + 1 + window]]
     row_like = [
         line for line in lookahead
         if line and not looks_like_table_header_line(line) and re.search(r"\d|[<>=%]", line)
@@ -819,16 +823,30 @@ def is_material_class_header_row(row, parameter_dim_row=None):
     return material_header_columns(row, parameter_dim_row) is not None
 
 
-def row_contains_parameter_dim(row):
+def row_looks_like_wide_key_header(row, page_lines=None):
     text = positioned_row_text(row)
-    return "Parameter" in text and re.search(r"\b(?:Dim\.?|Dimension)\b", text)
+    if not text or PAGE_HEADER_RE.match(text) or is_table_label_row(row):
+        return False
+    if re.search(r"\d|[<>=%]", text):
+        return False
+    words = sorted(row, key=lambda word: word[0])
+    if len(words) < 2 or len(words) > 4:
+        return False
+    if page_lines and len(vertical_grid_positions_at_y(page_lines, row_center_y(row))) < 4:
+        return False
+    first_text = words[0][4]
+    if re.match(r"^\(?\d", first_text):
+        return False
+    first_center = (words[0][0] + words[0][2]) / 2
+    second_center = (words[1][0] + words[1][2]) / 2
+    return first_center < 180 and second_center < 260 and second_center - first_center > 12
 
 
 def row_dim_center(row):
-    dim_word = next((word for word in row if word[4].startswith(("Dim", "Dimension"))), None)
-    if dim_word is None:
+    key_header = wide_table_key_header(row)
+    if key_header is None:
         return None
-    return (dim_word[0] + dim_word[2]) / 2
+    return key_header["key_centers"][1]
 
 
 def is_material_header_continuation(row, dim_center):
@@ -840,13 +858,25 @@ def is_material_header_continuation(row, dim_center):
     return len(centers) >= 2 and max(centers) - min(centers) > 20
 
 
+def wide_table_key_header(row):
+    words = sorted(row, key=lambda word: word[0])
+    if len(words) < 2:
+        return None
+    if re.match(r"^\(?\d", words[0][4]):
+        return None
+    key_words = words[:2]
+    return {
+        "key_columns": [word[4] for word in key_words],
+        "key_centers": [(word[0] + word[2]) / 2 for word in key_words],
+    }
+
+
 def material_header_columns(header_row, parameter_dim_row=None, continuation_row=None):
     dim_row = parameter_dim_row or header_row
-    parameter_word = next((word for word in dim_row if word[4].startswith("Parameter")), None)
-    dim_word = next((word for word in dim_row if word[4].startswith(("Dim", "Dimension"))), None)
-    if parameter_word is None or dim_word is None:
+    key_header = wide_table_key_header(dim_row)
+    if key_header is None:
         return None
-    dim_center = (dim_word[0] + dim_word[2]) / 2
+    dim_center = key_header["key_centers"][1]
     material_header_words = [
         word for word in header_row
         if (word[0] + word[2]) / 2 > dim_center + 8
@@ -869,11 +899,8 @@ def material_header_columns(header_row, parameter_dim_row=None, continuation_row
             else:
                 combined_columns.append(column)
         material_columns = combined_columns
-    columns = ["Parameter", "Dim."] + material_columns
-    centers = [
-        (parameter_word[0] + parameter_word[2]) / 2,
-        dim_center,
-    ] + [
+    columns = key_header["key_columns"] + material_columns
+    centers = key_header["key_centers"] + [
         (word[0] + word[2]) / 2 for word in material_header_words
     ]
     return columns, centers
@@ -950,8 +977,6 @@ def parse_material_panel_rows(page_rows, start_idx, end_idx, columns, centers, p
             if current is not None:
                 break
             continue
-        if row_contains_parameter_dim(row):
-            break
         cells = material_table_row_to_cells(row, boundaries)
         if not any(cells):
             continue
@@ -991,9 +1016,10 @@ def merge_material_panel_sections(sections, all_columns):
         for idx, row in enumerate(rows):
             if not isinstance(row, dict):
                 continue
-            key = (
-                normalize_for_compare(row.get("Parameter", "")),
-                normalize_for_compare(row.get("Dim.", "")),
+            key_columns = section.get("columns", [])[:2]
+            key = tuple(
+                normalize_for_compare(row.get(column, ""))
+                for column in key_columns
             )
             if not key[0]:
                 key = ("__row_{}__".format(len(merged_rows)), "")
@@ -1699,17 +1725,20 @@ def parse_geometric_material_table(table, block, fitz_word_pages, fitz_page_line
             (idx for idx in different_label_rows if idx > page_start_idx),
             len(page_rows),
         )
+        consumed_until = page_start_idx
         for row_idx, row in enumerate(page_rows):
             if row_idx < page_start_idx or row_idx >= page_end_idx:
                 continue
+            if row_idx < consumed_until:
+                continue
             header = None
             data_start_idx = None
-            if row_idx + 1 < page_end_idx and row_contains_parameter_dim(page_rows[row_idx + 1]):
+            if row_idx + 1 < page_end_idx and row_looks_like_wide_key_header(page_rows[row_idx + 1], page_lines):
                 if not is_material_class_header_row(row, page_rows[row_idx + 1]):
                     continue
                 header = material_header_columns(row, page_rows[row_idx + 1])
                 data_start_idx = row_idx + 2
-            elif row_contains_parameter_dim(row):
+            elif row_looks_like_wide_key_header(row, page_lines):
                 data_start_idx = row_idx + 1
                 continuation_row = None
                 dim_center = row_dim_center(row)
@@ -1761,6 +1790,7 @@ def parse_geometric_material_table(table, block, fitz_word_pages, fitz_page_line
                         "note_page_ranges": [],
                     }
                 )
+                consumed_until = end_idx
 
     if not sections:
         return None
@@ -1834,9 +1864,8 @@ def parse_table_block(table_text, line_pages=None, label_override=None):
             if heading_match.group(2).strip():
                 title_lines.append(heading_match.group(2).strip())
     header_index = None
-    header_keywords = ("Konzentration", "Verfahrenshinweise", "Parameter", "Norm", "Ausgabe")
     for idx, line in enumerate(lines[header_search_start:], start=header_search_start):
-        if any(keyword in line for keyword in header_keywords):
+        if looks_like_table_header_line(line) and has_following_table_rows(lines, idx):
             header_index = idx
             break
         title_lines.append(line)
