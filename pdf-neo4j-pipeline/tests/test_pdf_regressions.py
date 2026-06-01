@@ -124,6 +124,24 @@ def test_ersatzbaustoffv_table_regressions(regression_outputs):
     assert len(table_1[0]["columns"]) == 20
     assert len(table_1[0]["rows"]) == 18
 
+    table_2 = matching_tables(payload, "Anlage 1 Tabelle 2")
+    assert len(table_2) == 1
+    assert table_2[0]["parser_name"] == "grid"
+    assert table_2[0]["columns"] == ["Parameter", "Dimension", "GS-0", "GS-1", "GS-2", "GS-3"]
+    assert len(table_2[0]["rows"]) == 11
+
+    anlage_5_table_1 = matching_tables(payload, "Anlage 5 Tabelle 1")
+    assert len(anlage_5_table_1) == 1
+    assert anlage_5_table_1[0]["parser_name"] == "grid"
+    assert anlage_5_table_1[0]["columns"] == [
+        "Parameter",
+        "Dimension",
+        "Bewertungs- relevanter Bereich",
+        "Norm",
+        "Normbezeichnung",
+    ]
+    assert len(anlage_5_table_1[0]["rows"]) >= 20
+
     anlage_2 = matching_tables(payload, "Anlage 2 Tabelle")
     assert len(anlage_2) == 27
     assert {len(chunk["columns"]) for chunk in anlage_2} == {11}

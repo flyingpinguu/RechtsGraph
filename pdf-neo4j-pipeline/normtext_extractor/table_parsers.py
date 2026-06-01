@@ -86,20 +86,21 @@ class MultiPanelContinuationTableParser:
 
 
 class GridTableParser:
-    """Placeholder for simple grid tables.
-
-    Simple grid tables currently use the conservative text parse. The class is
-    intentionally present so new grid logic can be added without touching the
-    main extraction pipeline.
-    """
+    """Parse tables with explicit horizontal and vertical grid lines."""
 
     name = "grid"
 
     def can_parse(self, context: TableParseContext) -> bool:
-        return False
+        return _has_page_geometry(context)
 
     def parse(self, context: TableParseContext) -> Optional[Dict[str, Any]]:
-        return None
+        pipeline = _pipeline_module()
+        return pipeline.parse_geometric_grid_table(
+            context.table,
+            context.block,
+            context.fitz_word_pages,
+            context.fitz_page_lines,
+        )
 
 
 class KeyValueTableParser(GridTableParser):

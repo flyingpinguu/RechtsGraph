@@ -1052,6 +1052,138 @@ def merge_material_panel_sections(sections, all_columns):
     return merged_rows, merged_page_ranges
 
 
+def compatible_grid_positions(left, right, tolerance=2.0):
+    if not left or not right or len(left) != len(right):
+        return False
+    return all(abs(a - b) <= tolerance for a, b in zip(left, right))
+
+
+def block_lines_for_page(block, page_idx):
+    return [
+        line
+        for line, line_page in zip(block.get("lines", []), block.get("line_pages", []))
+        if line_page == page_idx and normalize_for_compare(line)
+    ]
+
+
+def find_matching_row_index(rows, targets, reverse=False):
+    indexed_rows = list(enumerate(rows))
+    if reverse:
+        indexed_rows = list(reversed(indexed_rows))
+    normalized_targets = [normalize_for_compare(target) for target in targets]
+    normalized_targets = [target for target in normalized_targets if target]
+    if reverse:
+        normalized_targets = list(reversed(normalized_targets))
+    for target in normalized_targets:
+        for idx, row in indexed_rows:
+            row_text = positioned_row_text(row)
+            if not row_text:
+                continue
+            if target == row_text or target in row_text or row_text in target:
+                return idx
+    return None
+
+
+def page_row_bounds_for_block(block, page_idx, page_rows, first_page_idx, last_page_idx):
+    start_idx = 0
+    end_idx = len(page_rows)
+    page_lines = block_lines_for_page(block, page_idx)
+    if page_idx == first_page_idx and page_lines:
+        matched = find_matching_row_index(page_rows, page_lines)
+        if matched is not None:
+            start_idx = matched
+    if page_idx == last_page_idx and page_lines:
+        matched = find_matching_row_index(page_rows, page_lines, reverse=True)
+        if matched is not None:
+            end_idx = min(len(page_rows), matched + 1)
+    return start_idx, end_idx
+
+
+def horizontal_grid_boundaries_for_positions(page_lines, positions, y_min, y_max):
+    if not page_lines or len(positions) < 2:
+        return []
+    left = positions[0]
+    right = positions[-1]
+    grouped = {}
+    for line in page_lines:
+        if line.get("orientation") != "horizontal":
+            continue
+        y = line.get("y")
+        if y is None or y < y_min or y > y_max:
+            continue
+        if line.get("x1", 0) < left - 2 or line.get("x0", 0) > right + 2:
+            continue
+        grouped.setdefault(round(float(y), 1), []).append(line)
+    boundaries = []
+    for y, spans in grouped.items():
+        min_x = min(span.get("x0", 0) for span in spans)
+        max_x = max(span.get("x1", 0) for span in spans)
+        if min_x <= left + 2 and max_x >= right - 2:
+            boundaries.append(y)
+    return sorted(set(boundaries))
+
+
+def cells_for_grid_band(page_rows, positions, y0, y1):
+    cells = [[] for _ in range(len(positions) - 1)]
+    for row in page_rows:
+        center_y = row_center_y(row)
+        if center_y < y0 - 0.75 or center_y > y1 + 0.75:
+            continue
+        row_cells = [[] for _ in range(len(positions) - 1)]
+        for word in sorted(row, key=lambda item: item[0]):
+            x0, _word_y0, x1, _word_y1, text = word[:5]
+            center_x = (x0 + x1) / 2
+            if center_x < positions[0] - 1 or center_x > positions[-1] + 1:
+                continue
+            for idx in range(len(positions) - 1):
+                if positions[idx] - 0.75 <= center_x < positions[idx + 1] + 0.75:
+                    row_cells[idx].append(text)
+                    break
+        for idx, row_cell in enumerate(row_cells):
+            if row_cell:
+                cells[idx].append(" ".join(row_cell))
+    return [
+        normalize_for_compare(" ".join(cell))
+        for cell in cells
+    ]
+
+
+def grid_columns_from_cells(cells):
+    return [cell or "column_{}".format(idx + 1) for idx, cell in enumerate(cells)]
+
+
+def grid_cells_are_empty(cells):
+    return not any(normalize_for_compare(cell) for cell in cells)
+
+
+def grid_cells_are_header_repeat(cells, columns):
+    if not columns or len(cells) != len(columns):
+        return False
+    non_empty = [
+        (normalize_for_compare(cell).lower(), normalize_for_compare(columns[idx]).lower())
+        for idx, cell in enumerate(cells)
+        if normalize_for_compare(cell)
+    ]
+    if len(non_empty) < min(2, len(columns)):
+        return False
+    matches = 0
+    for cell, column in non_empty:
+        if cell == column or cell in column or column in cell:
+            matches += 1
+    return matches >= max(1, len(non_empty) - 1)
+
+
+def append_grid_cells(target, cells):
+    for idx, cell in enumerate(cells):
+        if not cell:
+            continue
+        target[idx] = normalize_for_compare("{} {}".format(target[idx], cell))
+
+
+def grid_row_to_mapping(columns, cells):
+    return {column: cell for column, cell in zip(columns, cells)}
+
+
 def parse_table_title_from_text(table_text, fallback):
     lines = [line.strip() for line in table_text.splitlines() if line.strip()]
     first_line = lines[0] if lines else ""
@@ -1393,6 +1525,134 @@ def trim_leading_full_span_header_rows(header_assignments):
             keep_from = idx
             break
     return header_assignments[keep_from:]
+
+
+def parse_geometric_grid_table(table, block, fitz_word_pages, fitz_page_lines=None):
+    if not fitz_word_pages or not fitz_page_lines:
+        return None
+    line_pages = [page for page in block.get("line_pages", []) if page is not None]
+    if not line_pages:
+        return None
+
+    first_page_idx = min(line_pages)
+    last_page_idx = max(line_pages)
+    selected_positions = None
+    columns = None
+    header_text = None
+    rows = []
+    row_page_ranges = []
+    current = None
+    current_page_ranges = []
+    parsed_any_grid = False
+
+    def flush_current():
+        nonlocal current, current_page_ranges
+        if current is None:
+            return
+        if any(current):
+            rows.append(grid_row_to_mapping(columns, current))
+            row_page_ranges.append(merge_page_ranges(current_page_ranges))
+        current = None
+        current_page_ranges = []
+
+    for page_idx in sorted(set(line_pages)):
+        if page_idx < 0 or page_idx >= len(fitz_word_pages):
+            continue
+        page_words = [word[:5] for word in fitz_word_pages[page_idx]]
+        page_rows = group_positioned_words_into_rows(page_words)
+        page_lines = fitz_page_lines[page_idx] if page_idx < len(fitz_page_lines) else []
+        start_idx, end_idx = page_row_bounds_for_block(
+            block,
+            page_idx,
+            page_rows,
+            first_page_idx,
+            last_page_idx,
+        )
+
+        grid_infos = []
+        for row_idx in range(start_idx, end_idx):
+            row = page_rows[row_idx]
+            text = positioned_row_text(row)
+            if not text or PAGE_HEADER_RE.match(text):
+                continue
+            positions = vertical_grid_positions_at_y(page_lines, row_center_y(row))
+            if len(positions) < 4:
+                continue
+            if selected_positions is None:
+                selected_positions = positions
+            if compatible_grid_positions(positions, selected_positions):
+                grid_infos.append((row_idx, row, positions))
+            elif selected_positions is not None and grid_infos:
+                break
+
+        if not grid_infos:
+            continue
+
+        page_centers = [row_center_y(row) for _idx, row, _positions in grid_infos]
+        boundaries = horizontal_grid_boundaries_for_positions(
+            page_lines,
+            selected_positions,
+            min(page_centers) - 25,
+            max(page_centers) + 30,
+        )
+        if len(boundaries) < 2:
+            continue
+
+        parsed_any_grid = True
+        for band_idx, (y0, y1) in enumerate(zip(boundaries, boundaries[1:])):
+            cells = cells_for_grid_band(page_rows, selected_positions, y0, y1)
+            if grid_cells_are_empty(cells):
+                continue
+            if columns is None:
+                columns = grid_columns_from_cells(cells)
+                header_text = " | ".join(columns)
+                continue
+            if band_idx == 0 and grid_cells_are_header_repeat(cells, columns):
+                continue
+            if len(cells) != len(columns):
+                continue
+
+            key_width = min(2, len(cells))
+            has_key = any(cells[:key_width])
+            current_has_key = bool(current and any(current[:key_width]))
+            if current is None:
+                current = cells
+                current_page_ranges = [page_range_from_page(page_idx + 1)]
+                continue
+            if not has_key or not current_has_key:
+                append_grid_cells(current, cells)
+                current_page_ranges.append(page_range_from_page(page_idx + 1))
+                continue
+            flush_current()
+            current = cells
+            current_page_ranges = [page_range_from_page(page_idx + 1)]
+
+    flush_current()
+
+    if not parsed_any_grid or not columns or not rows or len(columns) < 3:
+        return None
+
+    return {
+        "label": table.get("label") or block.get("label") or "Tabelle",
+        "title": table.get("title"),
+        "columns": columns,
+        "column_header_text": header_text,
+        "rows": rows,
+        "row_page_ranges": row_page_ranges,
+        "notes": table.get("notes", []),
+        "note_page_ranges": table.get("note_page_ranges", []),
+        "sections": [
+            {
+                "section_label": None,
+                "columns": columns,
+                "column_header_text": header_text,
+                "rows": rows,
+                "row_page_ranges": row_page_ranges,
+                "notes": table.get("notes", []),
+                "note_page_ranges": table.get("note_page_ranges", []),
+            }
+        ],
+    }
 
 
 def derive_nested_symbol_columns(
