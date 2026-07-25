@@ -168,6 +168,36 @@ def source_pdf_aliases(source_pdf: Optional[str]) -> Set[str]:
     return aliases
 
 
+def source_xml_aliases(
+    source_xml: Optional[str],
+    source_zip: Optional[str] = None,
+) -> Set[str]:
+    """Return document-like names from XML members and their package paths."""
+    aliases: Set[str] = set()
+    generic_names = {"xml", "xml.zip", "download", "download.zip"}
+    for source in (source_xml, source_zip):
+        normalized = re.sub(r"[?#].*$", "", source or "").replace("\\", "/").strip("/")
+        if not normalized:
+            continue
+        parts = [part for part in normalized.split("/") if part]
+        candidates = [parts[-1]]
+        if len(parts) > 1 and parts[-1].lower() in generic_names:
+            candidates.append(parts[-2])
+        for candidate in candidates:
+            stem = candidate.strip()
+            previous = None
+            while stem and stem != previous:
+                previous = stem
+                stem = re.sub(r"\.(?:xml|zip)$", "", stem, flags=re.IGNORECASE)
+            if not stem or stem.lower() in {"xml", "download"}:
+                continue
+            aliases.add(stem)
+            stripped = re.sub(r"^\d+[_-]", "", stem)
+            if stripped and stripped != stem:
+                aliases.add(stripped)
+    return aliases
+
+
 def document_part_from_target_key(global_key: str) -> str:
     for marker in ("_para_", "_art_", "_anlage_", "_anhang_"):
         if marker in global_key:
@@ -230,6 +260,11 @@ def document_key_from_unit_global_key(global_key: str) -> str:
         if marker in global_key:
             return global_key.split(marker, 1)[0]
     return global_key.split("_", 1)[0] if "_" in global_key else global_key
+
+
+def article_context_from_unit_global_key(global_key: str) -> Optional[str]:
+    match = re.match(r"^(?P<context>.+_art_[^_]+)_para_[^_]+(?:_|$)", global_key or "")
+    return match.group("context") if match else None
 
 
 def expand_number_range(start: str, end: str) -> List[str]:
@@ -470,11 +505,18 @@ class ReferenceExtractor:
                     "full_title",
                     "full_citation",
                     "source_pdf",
+                    "source_xml",
+                    "source_zip",
                 ):
                     alias = props.get(alias_field)
                     if alias:
                         self.register_document_alias(alias, document_global_key, node["id"])
                 for alias in source_pdf_aliases(props.get("source_pdf")):
+                    self.register_document_alias(alias, document_global_key, node["id"])
+                for alias in source_xml_aliases(
+                    props.get("source_xml"),
+                    props.get("source_zip"),
+                ):
                     self.register_document_alias(alias, document_global_key, node["id"])
                 for alias in title_aliases_from_citation(props.get("full_citation")):
                     self.register_document_alias(alias, document_global_key, node["id"])
@@ -527,9 +569,26 @@ class ReferenceExtractor:
             document = self.document_by_id.get(unit_props.get("document_id") or "")
             if document:
                 doc_props = document.get("properties") or {}
-                for field in ("document_key", "document_global_key", "global_key", "canonical_citation", "abbreviation", "title", "short_title"):
+                for field in (
+                    "document_key",
+                    "document_global_key",
+                    "global_key",
+                    "canonical_citation",
+                    "abbreviation",
+                    "title",
+                    "short_title",
+                    "source_xml",
+                    "source_zip",
+                ):
                     if doc_props.get(field):
                         aliases.add(slugify(doc_props[field]))
+                aliases.update(
+                    slugify(alias)
+                    for alias in source_xml_aliases(
+                        doc_props.get("source_xml"),
+                        doc_props.get("source_zip"),
+                    )
+                )
         return aliases
 
     def source_unit_id_for_chunk(self, chunk: Dict[str, Any]) -> str:
@@ -623,6 +682,17 @@ class ReferenceExtractor:
 
     def resolve_target(self, target_global_key: str) -> Tuple[str, str, Optional[str]]:
         candidate_keys = [target_global_key]
+        nested_para = re.match(
+            r"^(?P<document>.+)_art_[^_]+_para_(?P<tail>.+)$",
+            target_global_key,
+        )
+        if nested_para:
+            candidate_keys.append(
+                "{}_para_{}".format(
+                    nested_para.group("document"),
+                    nested_para.group("tail"),
+                )
+            )
         document_part = document_part_from_target_key(target_global_key)
         mapped_document_key = self.document_alias_to_global_key.get(slugify(document_part))
         if mapped_document_key and mapped_document_key != document_part:
@@ -973,11 +1043,14 @@ class ReferenceExtractor:
     ) -> List[Tuple[int, int]]:
         spans = []
         doc_key = self.document_key_for_chunk(chunk)
+        unit = self.unit_by_id.get(self.source_unit_id_for_chunk(chunk)) or {}
+        unit_global_key = (unit.get("properties") or {}).get("global_key") or ""
+        target_key_prefix = article_context_from_unit_global_key(unit_global_key) or doc_key
         for match in INTERNAL_PARA_RE.finditer(text):
             if self.overlaps(match.start(), match.end(), occupied):
                 continue
             body = match.group("body")
-            target_keys = global_keys_for_para_body(doc_key, "para", body)
+            target_keys = global_keys_for_para_body(target_key_prefix, "para", body)
             if not target_keys:
                 continue
             for target_key in target_keys:

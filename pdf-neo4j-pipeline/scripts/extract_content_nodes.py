@@ -24,6 +24,25 @@ from typing import Any, Dict, Iterable, List, Optional
 
 SCHEMA_VERSION = "0.1.0"
 
+XML_DOCUMENT_METADATA_FIELDS = (
+    "source_format",
+    "extractor",
+    "official_abbreviation",
+    "gii_document_number",
+    "gii_build_date",
+    "source_xml_sha256",
+    "source_xml_name",
+    "source_package_kind",
+    "source_package_sha256",
+    "pdf_alignment_status",
+)
+
+XML_STRUCTURED_FIELDS = {
+    "preformatted_blocks",
+    "structured_lists",
+    "table_data",
+}
+
 
 def stable_rel_id(rel_type: str, start_id: str, end_id: str, qualifier: str = "") -> str:
     raw = "|".join([rel_type, start_id, end_id, qualifier])
@@ -107,6 +126,20 @@ def pick_properties(source: Dict[str, Any], fields: Iterable[str]) -> Dict[str, 
     return props
 
 
+def add_xml_provenance_props(props: Dict[str, Any], source: Dict[str, Any]) -> None:
+    """Keep additive XML provenance without changing legacy PDF properties."""
+    for field, value in source.items():
+        if value is None:
+            continue
+        if (
+            field == "source_order"
+            or field.startswith("source_xml_")
+            or field.startswith("source_asset")
+            or field in XML_STRUCTURED_FIELDS
+        ):
+            props[field] = clean_value(value)
+
+
 def add_page_range_props(props: Dict[str, Any], source: Dict[str, Any]) -> None:
     start = page_start(source)
     end = page_end(source)
@@ -138,6 +171,8 @@ def document_node(document: Dict[str, Any]) -> Dict[str, Any]:
             "abbreviation",
             "full_citation",
             "source_pdf",
+            "source_xml",
+            "source_zip",
             "sha256",
             "date_enacted",
         ],
@@ -148,9 +183,13 @@ def document_node(document: Dict[str, Any]) -> Dict[str, Any]:
     page_refs = document.get("page_refs") or document.get("pages") or []
     props["page_count"] = len(page_refs)
     if document.get("metadata"):
-        if document["metadata"].get("short_title"):
-            props["short_title"] = document["metadata"]["short_title"]
-        props["metadata_json"] = json.dumps(document["metadata"], ensure_ascii=False, sort_keys=True)
+        metadata = document["metadata"]
+        if metadata.get("short_title"):
+            props["short_title"] = metadata["short_title"]
+        for field in XML_DOCUMENT_METADATA_FIELDS:
+            if metadata.get(field) is not None:
+                props[field] = clean_value(metadata[field])
+        props["metadata_json"] = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
     return {
         "id": document["document_id"],
         "labels": ["Document"],
@@ -174,6 +213,8 @@ def unit_node(unit: Dict[str, Any]) -> Dict[str, Any]:
             "number",
             "title",
             "breadcrumbs",
+            "sequence",
+            "source_order",
             "parent_unit_id",
             "child_unit_ids",
             "text_sha256",
@@ -189,6 +230,7 @@ def unit_node(unit: Dict[str, Any]) -> Dict[str, Any]:
             "uncertainty_reason",
         ],
     )
+    add_xml_provenance_props(props, unit)
     add_page_range_props(props, unit)
     if "text" in unit and unit.get("text") is not None:
         props["text_char_count"] = len(unit.get("text") or "")
@@ -227,6 +269,7 @@ def chunk_node(chunk: Dict[str, Any]) -> Dict[str, Any]:
             "review_status",
         ],
     )
+    add_xml_provenance_props(props, chunk)
     add_page_range_props(props, chunk)
     add_row_range_props(props, chunk)
     props["text_preview"] = compact_text(chunk.get("text"), 500)
@@ -256,12 +299,49 @@ def relationship(
     }
 
 
+def explicit_order(value: Any) -> tuple:
+    """Return a total-order key for scalar or tuple/list source positions."""
+    if isinstance(value, (list, tuple)):
+        values = value
+    elif value is None:
+        values = ()
+    else:
+        values = (value,)
+    normalized = []
+    for item in values:
+        if isinstance(item, bool):
+            normalized.append((0, int(item)))
+        elif isinstance(item, (int, float)):
+            normalized.append((0, item))
+        else:
+            normalized.append((1, str(item)))
+    return tuple(normalized) if normalized else ((2, ""),)
+
+
+def source_position_key(item: Dict[str, Any]) -> tuple:
+    start = page_start(item)
+    if start is not None:
+        return (
+            0,
+            start,
+            page_end(item) if page_end(item) is not None else start,
+            explicit_order(item.get("source_order")),
+            explicit_order(item.get("sequence")),
+        )
+    return (
+        1,
+        0,
+        0,
+        explicit_order(item.get("source_order")),
+        explicit_order(item.get("sequence")),
+    )
+
+
 def sort_units(units: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(
         units,
         key=lambda unit: (
-            page_start(unit) if page_start(unit) is not None else 10**9,
-            page_end(unit) if page_end(unit) is not None else 10**9,
+            source_position_key(unit),
             str(unit.get("global_key") or unit.get("unit_id")),
         ),
     )
@@ -271,8 +351,7 @@ def sort_chunks(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(
         chunks,
         key=lambda chunk: (
-            page_start(chunk) if page_start(chunk) is not None else 10**9,
-            int(chunk.get("sequence") or 0),
+            source_position_key(chunk),
             str(chunk.get("global_key") or chunk.get("chunk_id")),
         ),
     )

@@ -100,6 +100,14 @@ def as_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
+def is_gii_xml_document(doc: Dict[str, Any]) -> bool:
+    metadata = doc.get("metadata")
+    return (
+        isinstance(metadata, dict)
+        and str(metadata.get("source_format") or "").lower() == "gii_xml"
+    )
+
+
 def table_rows(chunk: Dict[str, Any]) -> List[Any]:
     rows = chunk.get("structured_rows")
     if rows is None:
@@ -266,7 +274,15 @@ def validate_pages(
             document_id=document_id,
         )
     if not pages:
-        ctx.add("error", "NO_PAGE_REFS", "document has no page_refs/pages", document_id=document_id)
+        if not is_gii_xml_document(doc):
+            ctx.add("error", "NO_PAGE_REFS", "document has no page_refs/pages", document_id=document_id)
+        elif metadata.get("pdf_alignment_status") in {"aligned", "partial"}:
+            ctx.add(
+                "warning",
+                "XML_ALIGNMENT_WITHOUT_PAGE_REFS",
+                "XML document reports PDF alignment but has no page_refs/pages",
+                document_id=document_id,
+            )
         return {}, 0
 
     page_ids = [page.get("page_id") for page in pages if isinstance(page, dict) and page.get("page_id")]
@@ -303,6 +319,11 @@ def validate_pages(
                 continue
             page_path = resolve_page_path(ctx.path, page)
             if page_path is None:
+                if is_gii_xml_document(doc):
+                    # XML-primary payloads retain only secondary PDF page
+                    # numbers/hashes; duplicating PDF-extracted page text is
+                    # optional and intentionally omitted by the batch path.
+                    continue
                 missing.append("<missing path>")
                 continue
             if not page_path.exists():
@@ -609,13 +630,20 @@ def validate_raw_document(ctx: ValidationContext, doc: Dict[str, Any], check_pag
     unit_by_id = {unit.get("unit_id"): unit for unit in units if unit.get("unit_id")}
     chunk_by_id = {chunk.get("chunk_id"): chunk for chunk in chunks if chunk.get("chunk_id")}
     chunks_by_unit: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
+    page_ranges_required = bool(page_count) or not is_gii_xml_document(doc)
 
     paragraph_units = [unit for unit in units if unit.get("unit_type") == "paragraph"]
-    if not paragraph_units:
+    xml_provision_units = [
+        unit
+        for unit in units
+        if unit.get("unit_type") in {"article", "provision", "annex", "appendix"}
+    ]
+    if not paragraph_units and not (is_gii_xml_document(doc) and xml_provision_units):
         ctx.add("warning", "NO_PARAGRAPH_UNITS", "document has no paragraph structural units", document_id=document_id)
 
     for unit in units:
-        validate_page_range(ctx, unit, page_count, "UNIT", document_id)
+        if page_ranges_required:
+            validate_page_range(ctx, unit, page_count, "UNIT", document_id)
         parent_id = unit.get("parent_unit_id")
         if parent_id and parent_id not in unit_by_id:
             ctx.add(
@@ -647,7 +675,8 @@ def validate_raw_document(ctx: ValidationContext, doc: Dict[str, Any], check_pag
                 )
 
     for chunk in chunks:
-        validate_page_range(ctx, chunk, page_count, "CHUNK", document_id)
+        if page_ranges_required:
+            validate_page_range(ctx, chunk, page_count, "CHUNK", document_id)
         unit_id = chunk.get("unit_id")
         if unit_id:
             chunks_by_unit[unit_id].append(chunk)

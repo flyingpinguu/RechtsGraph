@@ -335,11 +335,13 @@ def _definition_list(dl: ET.Element) -> Dict[str, Any]:
 
 
 def _visible_footnote_marker(footnote: ET.Element) -> str:
-    marker = "{}{}{}".format(
-        footnote.get("Prefix") or "",
-        footnote.get("FnZ") or "",
-        footnote.get("Postfix") or "",
-    ).strip()
+    prefix = footnote.get("Prefix") or ""
+    number = footnote.get("FnZ") or ""
+    postfix = footnote.get("Postfix") or ""
+    # Two live GII records encode the visible number redundantly in Postfix
+    # ("2)" / "6)").  Preserve the source fields, but do not render "22)".
+    visible_tail = postfix if number and postfix.startswith(number) else number + postfix
+    marker = "{}{}".format(prefix, visible_tail).strip()
     return "[{}]".format(marker) if marker else ""
 
 
@@ -878,8 +880,32 @@ def extract_document_from_xml(
     document_global_key = slugify(short_title) or document_key
     doc_id = "doc_{}".format(make_id("gii_xml", document_number or package["xml_sha256"]))
     source_pdf = (source_manifest_entry or {}).get("pdf_file")
-    source_pdf = source_pdf or (source_manifest_entry or {}).get("relative_file_path")
     source_pdf = source_pdf or (source_manifest_entry or {}).get("pdf_relative_path")
+    pdf_manifest_matches = (source_manifest_entry or {}).get(
+        "pdf_manifest_matches"
+    ) or []
+    if not source_pdf and pdf_manifest_matches and isinstance(
+        pdf_manifest_matches[0],
+        dict,
+    ):
+        source_pdf = pdf_manifest_matches[0].get("relative_file_path")
+    if (
+        not source_pdf
+        and not (source_manifest_entry or {}).get("relative_archive_path")
+        and not (source_manifest_entry or {}).get("xml_files")
+    ):
+        source_pdf = (source_manifest_entry or {}).get("relative_file_path")
+    manifest_xml_path = (source_manifest_entry or {}).get("xml_relative_file_path")
+    manifest_xml_path = manifest_xml_path or (
+        source_manifest_entry or {}
+    ).get("relative_xml_path")
+    if not manifest_xml_path:
+        manifest_xml_files = (source_manifest_entry or {}).get("xml_files") or []
+        if manifest_xml_files and isinstance(manifest_xml_files[0], dict):
+            manifest_xml_path = manifest_xml_files[0].get("relative_file_path")
+    manifest_archive_path = (source_manifest_entry or {}).get(
+        "relative_archive_path"
+    )
     source_asset_refs, missing_assets = _asset_reference_manifest(
         root,
         package["assets"],
@@ -1491,9 +1517,9 @@ def extract_document_from_xml(
     doc = {
         "document_id": doc_id,
         "source_pdf": source_pdf,
-        "source_xml": package["xml_name"],
+        "source_xml": manifest_xml_path or package["xml_name"],
         "source_zip": (
-            package["package_path"]
+            manifest_archive_path or Path(package["package_path"]).name
             if package["package_kind"] == "zip"
             else None
         ),
@@ -1521,7 +1547,9 @@ def extract_document_from_xml(
             "gii_build_date": root.get("builddate"),
             "source_xml_sha256": package["xml_sha256"],
             "source_xml_name": package["xml_name"],
-            "source_package_path": package["package_path"],
+            "source_package_path": (
+                manifest_archive_path or Path(package["package_path"]).name
+            ),
             "source_package_kind": package["package_kind"],
             "source_package_sha256": package["package_sha256"],
             "source_package_bytes": package["package_bytes"],

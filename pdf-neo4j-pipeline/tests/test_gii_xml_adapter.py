@@ -162,6 +162,28 @@ def test_zip_reader_records_assets_without_extracting(tmp_path):
     }
 
 
+def test_downloader_manifest_provenance_does_not_confuse_xml_with_pdf(tmp_path):
+    package = tmp_path / "sample.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("BJNRTEST.xml", XML_SAMPLE)
+    document, _issues = extract_document_from_xml(
+        package,
+        {
+            "relative_archive_path": "packages/test/source.zip",
+            "relative_file_path": "packages/test/xml/BJNRTEST.xml",
+            "xml_files": [
+                {"relative_file_path": "packages/test/xml/BJNRTEST.xml"}
+            ],
+            "pdf_manifest_matches": [
+                {"relative_file_path": "T/0001_test.pdf"}
+            ],
+        },
+    )
+    assert document["source_pdf"] == "T/0001_test.pdf"
+    assert document["source_xml"] == "packages/test/xml/BJNRTEST.xml"
+    assert document["source_zip"] == "packages/test/source.zip"
+
+
 def test_zip_reader_rejects_unsafe_members(tmp_path):
     package = tmp_path / "unsafe.zip"
     with zipfile.ZipFile(package, "w") as archive:
@@ -191,7 +213,7 @@ def test_adapter_resolves_footnotes_and_keeps_list_and_preformatted_structure(
             <DL Type="alpha"><DT>a)</DT><DD><LA>erster Punkt</LA></DD></DL>
           </P>
         </Content><Footnotes>
-          <Footnote ID="fn-1" FnZ="1">Erläuterung.</Footnote>
+          <Footnote ID="fn-1" FnZ="2" Postfix="2)">Erläuterung.</Footnote>
           <Footnote ID="fn-orphan" FnZ="*">Unreferenziert, aber erhalten.</Footnote>
         </Footnotes></text></textdaten>
       </norm>
@@ -207,7 +229,8 @@ def test_adapter_resolves_footnotes_and_keeps_list_and_preformatted_structure(
         if chunk["unit_id"] == paragraph["unit_id"]
         and chunk["chunk_type"] == "subsection"
     )
-    assert subsection["text"].count("[1]") == 1
+    assert subsection["text"].count("[2)]") == 1
+    assert "22)" not in subsection["text"]
     assert "Fortsetzung mit Liste" in subsection["text"]
     assert subsection["structured_lists"][0]["items"][0]["marker"] == "a)"
     assert subsection["structured_lists"][0]["items"][0]["text"] == "erster Punkt"
