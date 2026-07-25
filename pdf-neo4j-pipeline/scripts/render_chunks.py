@@ -9,7 +9,7 @@ def chunk_to_html(chunk):
     label = chunk.get("display_name") or chunk.get("legal_citation", "Chunk")
     
     html = []
-    html.append(f"<div style='border: 1px solid #ccc; margin-bottom: 12px; padding: 8px; border-radius: 4px; font-family: sans-serif;'>")
+    html.append(f"<div style='margin-bottom: 16px; font-family: sans-serif;'>")
     html.append(f"<div style='background-color: #f0f0f0; padding: 4px; margin-bottom: 8px; font-size: 0.9em; font-weight: bold;'>")
     html.append(f"{label} (Type: {chunk_type}, ID: {chunk_id})")
     html.append(f"</div>")
@@ -18,27 +18,32 @@ def chunk_to_html(chunk):
         columns = chunk.get("columns", [])
         rows = chunk.get("rows", [])
         
-        html.append("<table border='1' cellpadding='4' cellspacing='0' style='border-collapse: collapse; width: 100%; font-size: 0.9em;'>")
+        html.append("<table cellpadding='4' cellspacing='0' style='width: 100%; font-size: 0.9em;'>")
         if columns:
             html.append("<tr>")
             for c in columns:
-                html.append(f"<th style='background-color: #e0e0e0; text-align: left;'>{c}</th>")
+                html.append(f"<th style='background-color: #e0e0e0; text-align: left; border: 1px solid #aaa;'>{c}</th>")
             html.append("</tr>")
             
         for r in rows:
             html.append("<tr>")
-            if isinstance(r, list):
-                # We have parsed cells!
+            if isinstance(r, dict):
+                # Row is a dictionary mapping column names to cell values
+                for c in columns:
+                    cell = r.get(c, "")
+                    html.append(f"<td style='border: 1px solid #aaa;'>{cell}</td>")
+            elif isinstance(r, list):
+                # Row is a list of cell values
                 for cell in r:
-                    html.append(f"<td>{cell}</td>")
+                    html.append(f"<td style='border: 1px solid #aaa;'>{cell}</td>")
                 # Pad if fewer cells than columns
                 if len(r) < len(columns):
                     for _ in range(len(columns) - len(r)):
-                        html.append("<td></td>")
+                        html.append("<td style='border: 1px solid #aaa;'></td>")
             else:
                 # Fallback to single string spanning all columns
                 colspan = max(len(columns), 1)
-                html.append(f"<td colspan='{colspan}'>{r}</td>")
+                html.append(f"<td colspan='{colspan}' style='border: 1px solid #aaa;'>{r}</td>")
             html.append("</tr>")
         html.append("</table>")
     else:

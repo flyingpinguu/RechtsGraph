@@ -18,6 +18,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 from typing import Any, Dict, Iterable, List, Optional
 
 
@@ -76,6 +77,28 @@ def clean_value(value: Any) -> Any:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
+def clean_citation_text(citation: Optional[str]) -> str:
+    cleaned = re.sub(r"\s+", " ", citation or "").strip()
+    return cleaned.strip('"').strip()
+
+
+def full_title_from_citation(citation: Optional[str]) -> Optional[str]:
+    cleaned = clean_citation_text(citation)
+    if not cleaned:
+        return None
+    for pattern in (
+        r"\s+in\s+der\s+Fassung\b",
+        r"\s+in\s+der\s+im\s+Bundesgesetzblatt\b",
+        r",\s+d(?:as|ie|er)\s+zuletzt\b",
+        r",\s+zuletzt\b",
+        r"\s+vom\s+\d{1,2}\.\s+[A-ZÄÖÜa-zäöüß]+\s+\d{4}\b",
+    ):
+        match = re.search(pattern, cleaned)
+        if match and match.start() > 5:
+            return cleaned[: match.start()].strip()
+    return cleaned
+
+
 def pick_properties(source: Dict[str, Any], fields: Iterable[str]) -> Dict[str, Any]:
     props: Dict[str, Any] = {}
     for field in fields:
@@ -119,6 +142,9 @@ def document_node(document: Dict[str, Any]) -> Dict[str, Any]:
             "date_enacted",
         ],
     )
+    full_title = full_title_from_citation(document.get("full_citation"))
+    if full_title:
+        props["full_title"] = full_title
     page_refs = document.get("page_refs") or document.get("pages") or []
     props["page_count"] = len(page_refs)
     if document.get("metadata"):
@@ -270,7 +296,81 @@ def add_next_relationships(
         )
 
 
+def graph_scoped_id(raw_id: Optional[str], document_id: str) -> Optional[str]:
+    if not raw_id:
+        return raw_id
+    if raw_id.startswith("doc_"):
+        return raw_id
+    suffix = "__{}".format(document_id)
+    if raw_id.endswith(suffix):
+        return raw_id
+    return "{}{}".format(raw_id, suffix)
+
+
+def graph_scoped_document(document: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a graph-export copy whose node ids are unique corpus-wide.
+
+    Raw extraction IDs intentionally follow legal/global names so they are easy
+    to inspect. In the full corpus, however, multiple PDFs can contain the same
+    legal title and paragraph numbers. Neo4j node ids therefore need a document
+    namespace while the legal `global_key` properties stay unchanged for
+    reference resolution and citation display.
+    """
+    document_id = document["document_id"]
+    unit_id_map = {
+        unit.get("unit_id"): graph_scoped_id(unit.get("unit_id"), document_id)
+        for unit in document.get("structural_units") or []
+        if unit.get("unit_id")
+    }
+    chunk_id_map = {
+        chunk.get("chunk_id"): graph_scoped_id(chunk.get("chunk_id"), document_id)
+        for chunk in document.get("chunks") or []
+        if chunk.get("chunk_id")
+    }
+
+    scoped = dict(document)
+    scoped_units = []
+    for unit in document.get("structural_units") or []:
+        scoped_unit = dict(unit)
+        raw_unit_id = unit.get("unit_id")
+        scoped_unit["unit_id"] = unit_id_map.get(raw_unit_id, raw_unit_id)
+        parent_unit_id = unit.get("parent_unit_id")
+        if parent_unit_id:
+            scoped_unit["parent_unit_id"] = unit_id_map.get(parent_unit_id, parent_unit_id)
+        child_unit_ids = unit.get("child_unit_ids")
+        if isinstance(child_unit_ids, list):
+            scoped_unit["child_unit_ids"] = [
+                unit_id_map.get(child_id, child_id)
+                for child_id in child_unit_ids
+            ]
+        scoped_units.append(scoped_unit)
+
+    scoped_chunks = []
+    for chunk in document.get("chunks") or []:
+        scoped_chunk = dict(chunk)
+        raw_chunk_id = chunk.get("chunk_id")
+        scoped_chunk["chunk_id"] = chunk_id_map.get(raw_chunk_id, raw_chunk_id)
+        unit_id = chunk.get("unit_id")
+        if unit_id:
+            scoped_chunk["unit_id"] = unit_id_map.get(unit_id, unit_id)
+        parent_chunk_id = chunk.get("parent_chunk_id")
+        if parent_chunk_id:
+            scoped_chunk["parent_chunk_id"] = chunk_id_map.get(parent_chunk_id, parent_chunk_id)
+        child_chunk_ids = chunk.get("child_chunk_ids")
+        if isinstance(child_chunk_ids, list):
+            scoped_chunk["child_chunk_ids"] = [
+                chunk_id_map.get(child_id, child_id)
+                for child_id in child_chunk_ids
+            ]
+        scoped_chunks.append(scoped_chunk)
+
+    scoped["structural_units"] = scoped_units
+    scoped["chunks"] = scoped_chunks
+    return scoped
+
+
 def export_document(document: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    document = graph_scoped_document(document)
     nodes: List[Dict[str, Any]] = [document_node(document)]
     relationships: List[Dict[str, Any]] = []
 

@@ -21,7 +21,7 @@ import hashlib
 import json
 import os
 import re
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 
 SCHEMA_VERSION = "0.1.0"
@@ -55,7 +55,7 @@ CONTEXTUAL_SUBSECTION_RE = re.compile(
     r"(?P<mention>\b(?:Abs\.|Absatz)\s+(?P<num>\d+[a-z]?)\b)"
 )
 INTERNAL_ANNEX_RE = re.compile(
-    rf"(?P<mention>\bAnlagen?\s+(?P<body>\d+[a-z]?"
+    rf"(?P<mention>\b(?P<annex_kind>Anlagen?|Anhang|Anhänge|Anhaenge)\s+(?P<body>\d+[a-z]?"
     rf"(?:{HSPACE}*(?:und|oder|,|-|bis){HSPACE}*\d+[a-z]?)*"
     rf")"
     rf"(?:\s+Tabelle\s+(?P<table_body>\d+[a-z]?"
@@ -127,6 +127,54 @@ def normalize_abbreviation(abbr: str) -> str:
     return slugify(abbr)
 
 
+def clean_citation_text(citation: Optional[str]) -> str:
+    cleaned = re.sub(r"\s+", " ", citation or "").strip()
+    return cleaned.strip('"').strip()
+
+
+def title_aliases_from_citation(citation: Optional[str]) -> Set[str]:
+    """Return conservative document title aliases from a full legal citation."""
+    cleaned = clean_citation_text(citation)
+    aliases: Set[str] = set()
+    if not cleaned:
+        return aliases
+    aliases.add(cleaned)
+    cut_patterns = (
+        r"\s+in\s+der\s+Fassung\b",
+        r"\s+in\s+der\s+im\s+Bundesgesetzblatt\b",
+        r",\s+d(?:as|ie|er)\s+zuletzt\b",
+        r",\s+zuletzt\b",
+        r"\s+vom\s+\d{1,2}\.\s+[A-ZÄÖÜa-zäöüß]+\s+\d{4}\b",
+    )
+    for pattern in cut_patterns:
+        match = re.search(pattern, cleaned)
+        if match and match.start() > 5:
+            aliases.add(cleaned[: match.start()].strip())
+    for match in re.finditer(r"\(([^()]{4,120})\)", cleaned):
+        inside = match.group(1).strip()
+        if " - " in inside or " – " in inside:
+            short_title = re.split(r"\s+[–-]\s+", inside, 1)[0].strip()
+            if len(short_title) > 3:
+                aliases.add(short_title)
+    return aliases
+
+
+def source_pdf_aliases(source_pdf: Optional[str]) -> Set[str]:
+    stem = re.sub(r"\.pdf$", "", source_pdf or "", flags=re.IGNORECASE).strip()
+    aliases = {stem} if stem else set()
+    stripped = re.sub(r"^\d+[_-]", "", stem)
+    if stripped and stripped != stem:
+        aliases.add(stripped)
+    return aliases
+
+
+def document_part_from_target_key(global_key: str) -> str:
+    for marker in ("_para_", "_art_", "_anlage_", "_anhang_"):
+        if marker in global_key:
+            return global_key.split(marker, 1)[0]
+    return global_key
+
+
 def token_for_qualifier(kind: str) -> str:
     normalized = kind.replace(".", "").lower()
     if normalized == "abs" or normalized == "absatz":
@@ -168,6 +216,20 @@ def split_table_body(body: Optional[str]) -> List[str]:
         return []
     cleaned = re.sub(r"\bTabelle\b", " ", body, flags=re.IGNORECASE)
     return MULTI_NUM_RE.findall(cleaned)
+
+
+def annex_key_prefix(kind: str) -> str:
+    normalized = slugify(kind)
+    if normalized.startswith("anhang") or normalized.startswith("anhaenge"):
+        return "anhang"
+    return "anlage"
+
+
+def document_key_from_unit_global_key(global_key: str) -> str:
+    for marker in ("_para_", "_anlage_", "_anhang_", "_art_"):
+        if marker in global_key:
+            return global_key.split(marker, 1)[0]
+    return global_key.split("_", 1)[0] if "_" in global_key else global_key
 
 
 def expand_number_range(start: str, end: str) -> List[str]:
@@ -260,7 +322,7 @@ def target_level_from_global_key(global_key: str) -> str:
         return "subsection"
     if "_tabelle_" in global_key:
         return "table"
-    if "_anlage_" in global_key:
+    if "_anlage_" in global_key or "_anhang_" in global_key:
         return "annex"
     if "_art_" in global_key:
         return "article"
@@ -304,7 +366,7 @@ def text_without_heading(chunk: Dict[str, Any]) -> Tuple[str, int]:
     first = lines[0].strip()
     legal = props.get("legal_citation") or ""
     unit_id = props.get("unit_id") or ""
-    if "Anlage" in first:
+    if "Anlage" in first or "Anhang" in first:
         return text, 0
     if first.startswith("§") and legal.startswith(first.split()[0]):
         offset = len(lines[0]) + (1 if "\n" in text else 0)
@@ -364,6 +426,7 @@ class ReferenceExtractor:
         self.document_by_id: Dict[str, Dict[str, Any]] = {}
         self.document_key_by_id: Dict[str, str] = {}
         self.document_alias_to_global_key: Dict[str, str] = {}
+        self._document_alias_candidates: Dict[str, Set[Tuple[str, str]]] = {}
         self.unit_by_id: Dict[str, Dict[str, Any]] = {}
         self.chunk_by_id: Dict[str, Dict[str, Any]] = {}
         self.chunks_by_unit_id: Dict[str, List[Dict[str, Any]]] = {}
@@ -374,6 +437,12 @@ class ReferenceExtractor:
         }
         self.seen_reference_keys = set()
         self._index_graph()
+
+    def register_document_alias(self, alias: Optional[str], document_global_key: str, document_id: str) -> None:
+        alias_key = slugify(alias or "")
+        if not alias_key or not document_global_key:
+            return
+        self._document_alias_candidates.setdefault(alias_key, set()).add((document_global_key, document_id))
 
     def _index_graph(self) -> None:
         for node in self.graph.get("nodes") or []:
@@ -389,14 +458,26 @@ class ReferenceExtractor:
                     self.document_key_by_id[node["id"]] = props["document_key"]
                     self.global_to_node_id[props["document_key"]] = node["id"]
                 if document_global_key:
-                    self.document_alias_to_global_key[slugify(document_global_key)] = document_global_key
-                for alias_field in ("document_key", "canonical_citation", "abbreviation", "title", "short_title"):
+                    self.register_document_alias(document_global_key, document_global_key, node["id"])
+                for alias_field in (
+                    "document_key",
+                    "document_global_key",
+                    "global_key",
+                    "canonical_citation",
+                    "abbreviation",
+                    "title",
+                    "short_title",
+                    "full_title",
+                    "full_citation",
+                    "source_pdf",
+                ):
                     alias = props.get(alias_field)
                     if alias:
-                        alias_key = slugify(alias)
-                        self.global_to_node_id[alias_key] = node["id"]
-                        if document_global_key:
-                            self.document_alias_to_global_key[alias_key] = document_global_key
+                        self.register_document_alias(alias, document_global_key, node["id"])
+                for alias in source_pdf_aliases(props.get("source_pdf")):
+                    self.register_document_alias(alias, document_global_key, node["id"])
+                for alias in title_aliases_from_citation(props.get("full_citation")):
+                    self.register_document_alias(alias, document_global_key, node["id"])
             if "StructuralUnit" in labels:
                 self.unit_by_id[node["id"]] = node
             if "Chunk" in labels:
@@ -412,6 +493,12 @@ class ReferenceExtractor:
                     chunk["id"],
                 )
             )
+        for alias_key, candidates in self._document_alias_candidates.items():
+            if len(candidates) != 1:
+                continue
+            document_global_key, document_id = next(iter(candidates))
+            self.document_alias_to_global_key[alias_key] = document_global_key
+            self.global_to_node_id.setdefault(alias_key, document_id)
 
     def document_key_for_chunk(self, chunk: Dict[str, Any]) -> str:
         props = chunk.get("properties") or {}
@@ -420,7 +507,7 @@ class ReferenceExtractor:
             unit_props = unit.get("properties") or {}
             return (
                 unit_props.get("document_global_key")
-                or unit_props.get("global_key", "").split("_para_", 1)[0].split("_anlage_", 1)[0]
+                or document_key_from_unit_global_key(unit_props.get("global_key", ""))
                 or unit_props.get("document_key")
                 or ""
             )
@@ -508,7 +595,9 @@ class ReferenceExtractor:
         if node_id in self.unit_by_id:
             representative_id = self.representative_chunk_id_for_unit(node_id)
             return [representative_id] if representative_id else []
-        return [node_id]
+        if node_id in self.reference_targets or node_id.startswith("ref_target_"):
+            return [node_id]
+        return []
 
     def target_unit_id_for_reference(self, target_id: str, nearest_id: Optional[str]) -> Optional[str]:
         return self.unit_id_for_node(target_id) or self.unit_id_for_node(nearest_id)
@@ -533,13 +622,26 @@ class ReferenceExtractor:
         }
 
     def resolve_target(self, target_global_key: str) -> Tuple[str, str, Optional[str]]:
-        exact = self.global_to_node_id.get(target_global_key)
-        if exact:
-            return exact, "resolved", target_global_key
-        for nearest_key in strip_to_nearest_keys(target_global_key):
-            nearest = self.global_to_node_id.get(nearest_key)
-            if nearest:
-                return nearest, "resolved", nearest_key
+        candidate_keys = [target_global_key]
+        document_part = document_part_from_target_key(target_global_key)
+        mapped_document_key = self.document_alias_to_global_key.get(slugify(document_part))
+        if mapped_document_key and mapped_document_key != document_part:
+            if target_global_key == document_part:
+                candidate_keys.append(mapped_document_key)
+            elif target_global_key.startswith(document_part):
+                candidate_keys.append(mapped_document_key + target_global_key[len(document_part):])
+        seen_candidates = set()
+        for candidate_key in candidate_keys:
+            if candidate_key in seen_candidates:
+                continue
+            seen_candidates.add(candidate_key)
+            exact = self.global_to_node_id.get(candidate_key)
+            if exact:
+                return exact, "resolved", candidate_key
+            for nearest_key in strip_to_nearest_keys(candidate_key):
+                nearest = self.global_to_node_id.get(nearest_key)
+                if nearest:
+                    return nearest, "resolved", nearest_key
         return "ref_target_{}".format(slugify(target_global_key)), "unresolved", None
 
     def add_reference(
@@ -630,8 +732,10 @@ class ReferenceExtractor:
         # exact ReferenceTarget as the target.
         target_unit_id = self.target_unit_id_for_reference(target_id, nearest_id)
         if source_unit_id:
-            unit_target_id = target_unit_id or target_id
-            if unit_target_id != source_unit_id:
+            unit_target_id = target_unit_id
+            if not unit_target_id and (target_id in self.reference_targets or target_id.startswith("ref_target_")):
+                unit_target_id = target_id
+            if unit_target_id and unit_target_id != source_unit_id:
                 self.add_relationship_once("REFERS_TO", source_unit_id, unit_target_id, props)
 
         # Document level: connect documents when the target document is known.
@@ -789,12 +893,14 @@ class ReferenceExtractor:
             if self.overlaps(match.start(), match.end(), occupied):
                 continue
             numbers = split_para_body(match.group("body"))
+            annex_prefix = annex_key_prefix(match.group("annex_kind"))
             for number in numbers:
                 table_numbers = split_table_body(match.group("table_body"))
                 if table_numbers:
                     for table_number in table_numbers:
-                        target_key = "{}_anlage_{}_tabelle_{}".format(
+                        target_key = "{}_{}_{}_tabelle_{}".format(
                             doc_key,
+                            annex_prefix,
                             slugify(number),
                             slugify(table_number),
                         )
@@ -809,7 +915,7 @@ class ReferenceExtractor:
                             target_key,
                         )
                 else:
-                    target_key = "{}_anlage_{}".format(doc_key, slugify(number))
+                    target_key = "{}_{}_{}".format(doc_key, annex_prefix, slugify(number))
                     self.add_reference(
                         chunk,
                         match.group("mention"),

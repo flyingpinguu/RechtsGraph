@@ -85,14 +85,23 @@ Shard-Seitenmodell:
 
 Das alte doppelte Feld `pages` wird nicht mehr geschrieben.
 
-## Tabellen-Validierung
+## Extraktions-Validierung
 
-Nach jeder Änderung am Tabellenparser zuerst die Roh-Extraktion neu erzeugen
-und dann die erwarteten Tabellenformen prüfen:
+Der Batch-Validator prueft Roh-Extraktions-JSONs und Content-Graph-JSONs auf
+Schema-, ID-, Hierarchie-, Seitenbereichs-, Chunk- und Tabellenauffaelligkeiten.
+Ohne Argumente prueft er den aktuellen Standardlauf unter `output/refactor_4doc/raw`
+und schreibt Markdown- und JSON-Reports in den zugehoerigen `validation`-Ordner:
 
 ```bash
-./.venv/bin/python scripts/validate_table_shapes.py \
+./.venv/bin/python scripts/validate_parsed_jsons.py
+```
+
+Die alte Einzel-Tabellenpruefung ist weiterhin als Legacy-Modus verfuegbar:
+
+```bash
+./.venv/bin/python scripts/validate_parsed_jsons.py \
   --input output/raw_ersatzbaustoffv_current.json \
+  --legacy-summary \
   --contains 'Anlage 3 Tabelle' \
   --expect-columns 11 \
   --expect-rows 26 \
@@ -102,13 +111,15 @@ und dann die erwarteten Tabellenformen prüfen:
 Weitere schnelle Regressionen:
 
 ```bash
-./.venv/bin/python scripts/validate_table_shapes.py \
+./.venv/bin/python scripts/validate_parsed_jsons.py \
   --input output/raw_ersatzbaustoffv_current.json \
+  --legacy-summary \
   --contains 'Anlage 2 Tabelle' \
   --expect-columns 11
 
-./.venv/bin/python scripts/validate_table_shapes.py \
+./.venv/bin/python scripts/validate_parsed_jsons.py \
   --input output/raw_ersatzbaustoffv_current.json \
+  --legacy-summary \
   --contains 'Anlage 1 Tabelle 1' \
   --expect-columns 20 \
   --expect-rows 18

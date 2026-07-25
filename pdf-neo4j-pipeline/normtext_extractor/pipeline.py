@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - optional local dependency
 # Regex patterns
 # ---------------------------------------------------------------------------
 PARA_RE = re.compile(r"^(\u00a7\s*\d+[a-z]?)(?:\s+(.+))?$")
-ANNEX_RE = re.compile(r"^(Anlage\s+\d+[a-z]?)(?:\s+(.+))?$")
+ANNEX_RE = re.compile(r"^((?:Anlage|Anhang)(?:\s+\d+[a-z]?)?)(?:\s+(.+))?$")
 SECTION_RE = re.compile(r"^(?:Abschnitt|A\s*b\s*s\s*c\s*h\s*n\s*i\s*t\s*t)\s+\d+", re.IGNORECASE)
 SUBSECTION_GROUP_RE = re.compile(
     r"^(?:Unterabschnitt|U\s*n\s*t\s*e\s*r\s*a\s*b\s*s\s*c\s*h\s*n\s*i\s*t\s*t)\s+\d+",
@@ -46,10 +46,16 @@ PARA_REFERENCE_TAIL_RE = re.compile(
     re.IGNORECASE,
 )
 ANNEX_REFERENCE_TAIL_RE = re.compile(
-    r"^(?:Tabelle|Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.|und|oder|sowie|,)\b",
+    r"^(?:Tabelle\b|Teil\b|Abschnitt\b|Abs\.|Absatz\b|Satz\b|Nummer\b|Nr\.|Buchstabe\b|Buchst\.|und\b|oder\b|sowie\b|,)",
+    re.IGNORECASE,
+)
+TABLE_HEADING_RE = re.compile(r"^(Tabelle\s+\d+[a-z]?)(?::\s*(.*)|(?:\s+(.+))?)$", re.IGNORECASE)
+TABLE_REFERENCE_TAIL_RE = re.compile(
+    r"^(?:Nummer\b|Nr\.|Abs\.|Absatz\b|Satz\b|Buchstabe\b|Buchst\.|zu\b|nach\b|gemäß\b)",
     re.IGNORECASE,
 )
 SUBSECTION_RE = re.compile(r"\((\d+)\)\s")
+SUBSECTION_START_RE = re.compile(r"^\s*\((\d+)\)\s")
 LIST_ITEM_RE = re.compile(r"^\s*((?:\d+[a-z]?|[a-z])[\.)])\s+(.+)$")
 AVV_WASTE_RE = re.compile(r"^(\d{2}\s\d{2}(?:\s\d{2})?\*?)\s+(.+)$")
 PAGE_HEADER_RE = re.compile(
@@ -115,6 +121,29 @@ def paragraph_number(label):
     return label.replace("\u00a7", "").strip()
 
 
+def annex_number(label):
+    number = re.sub(r"^(?:Anlage|Anhang)\s*", "", label or "").strip()
+    return number or "anlage"
+
+
+def annex_key_kind(label):
+    if (label or "").lower().startswith("anhang"):
+        return "anhang"
+    return "anlage"
+
+
+def same_annex_label(left, right):
+    return slugify(left or "") == slugify(right or "")
+
+
+def annex_order_value(label):
+    match = re.search(r"(?:Anlage|Anhang)\s+(\d+)([a-z]?)", label or "", re.IGNORECASE)
+    if not match:
+        return None
+    letter_value = ord(match.group(2).lower()) - ord("a") + 1 if match.group(2) else 0
+    return (int(match.group(1)), letter_value)
+
+
 def unit_slug(doc_key, unit_type, number):
     return "{}_{}_{}".format(doc_key, unit_type, slugify(str(number)))
 
@@ -125,6 +154,15 @@ def chunk_slug(*parts):
         for part in parts
         if part is not None and str(part).strip()
     )
+
+
+def unique_global_key(base_key, existing_ids, id_prefix):
+    candidate = base_key
+    suffix = 2
+    while "{}{}".format(id_prefix, candidate) in existing_ids:
+        candidate = "{}_part_{}".format(base_key, suffix)
+        suffix += 1
+    return candidate
 
 
 def legal_citation(citation_prefix, unit_type, label, title=None):
@@ -329,16 +367,60 @@ def is_allowed_annex_lowercase_tail(tail):
     )
 
 
+def starts_with_parenthetical_continuation(tail):
+    if not tail.startswith("(") or is_allowed_annex_lowercase_tail(tail):
+        return False
+    closing_index = tail.find(")")
+    if closing_index < 0:
+        return False
+    remainder = tail[closing_index + 1 :].strip()
+    return bool(remainder) and remainder[0].islower()
+
+
 def match_annex_heading(stripped):
     match = ANNEX_RE.match(stripped)
     if not match:
         return None
+    label = (match.group(1) or "").strip()
     tail = (match.group(2) or "").strip()
+    if not tail:
+        return None
+    has_explicit_number = bool(re.search(r"\d", label))
+    if not has_explicit_number and not is_allowed_annex_lowercase_tail(tail):
+        return None
     if tail and ANNEX_REFERENCE_TAIL_RE.match(tail):
+        return None
+    if starts_with_parenthetical_continuation(tail):
+        return None
+    if tail == "." or (tail.endswith(")") and "(" not in tail):
         return None
     if tail and tail[0].islower() and not is_allowed_annex_lowercase_tail(tail):
         return None
     if tail.startswith("zu ") and not is_allowed_annex_lowercase_tail(tail):
+        return None
+    return match
+
+
+def looks_like_table_heading_list(lines, index, window=6):
+    start = max(0, index - window // 2)
+    end = min(len(lines), index + window // 2 + 1)
+    table_heading_count = 0
+    for candidate in lines[start:end]:
+        if match_table_heading(clean_line(candidate)):
+            table_heading_count += 1
+    return table_heading_count >= 3
+
+
+def match_table_heading(stripped):
+    match = TABLE_HEADING_RE.match(clean_line(stripped))
+    if not match:
+        return None
+    tail = ((match.group(2) if match.group(2) is not None else match.group(3)) or "").strip()
+    if not tail:
+        return match
+    if TABLE_REFERENCE_TAIL_RE.match(tail):
+        return None
+    if ":" not in stripped and tail[0].islower():
         return None
     return match
 
@@ -359,7 +441,7 @@ def document_line_stream(page_text_map):
     return stream
 
 
-def next_significant_lines(stream, index, limit=4):
+def next_significant_lines(stream, index, limit=8):
     lines = []
     for _page_idx, line in stream[index + 1:]:
         stripped = clean_line(line)
@@ -371,23 +453,122 @@ def next_significant_lines(stream, index, limit=4):
     return lines
 
 
+def looks_like_spaced_heading(stripped):
+    tokens = stripped.split()
+    if len(tokens) < 8:
+        return False
+    single_letter_tokens = sum(1 for token in tokens if re.fullmatch(r"[A-Za-zÄÖÜäöüß]", token))
+    return single_letter_tokens / max(len(tokens), 1) >= 0.6
+
+
+def looks_like_body_text_line(line):
+    stripped = clean_line(line)
+    if not stripped:
+        return False
+    if is_structure_listing_line(stripped) or is_section_listing_line(stripped):
+        return False
+    if looks_like_spaced_heading(stripped):
+        return False
+    if SUBSECTION_RE.search(stripped):
+        return True
+    if len(stripped) >= 70:
+        return True
+    if stripped.endswith((".", ";", ":")) and len(stripped.split()) >= 5:
+        return True
+    if len(stripped.split()) >= 8 and not re.match(r"^[A-ZÄÖÜ]\s", stripped):
+        return True
+    return False
+
+
+def previous_line_suggests_continuation(stream, index):
+    if index <= 0:
+        return False
+    page_idx, _line = stream[index]
+    prev_page_idx, prev_line = stream[index - 1]
+    if prev_page_idx != page_idx:
+        return False
+    previous = clean_line(prev_line)
+    if not previous:
+        return False
+    if previous.startswith("-"):
+        return False
+    if is_structure_listing_line(previous) or is_section_listing_line(previous):
+        return False
+    if previous.endswith((".", ";", ":", ")", "]")):
+        return False
+    tail_words = re.findall(r"[A-Za-zÄÖÜäöüß]+", previous)
+    if not tail_words:
+        return False
+    return tail_words[-1].lower() in {
+        "als",
+        "bei",
+        "bis",
+        "der",
+        "des",
+        "die",
+        "durch",
+        "fuer",
+        "für",
+        "gemaess",
+        "gemäß",
+        "im",
+        "in",
+        "mit",
+        "nach",
+        "oder",
+        "sowie",
+        "und",
+        "vom",
+        "von",
+        "zu",
+        "zur",
+        "zum",
+    }
+
+
+def looks_like_strong_body_text_line(line):
+    stripped = clean_line(line)
+    if not stripped:
+        return False
+    if is_structure_listing_line(stripped) or is_section_listing_line(stripped):
+        return False
+    if looks_like_spaced_heading(stripped):
+        return False
+    if SUBSECTION_RE.search(stripped):
+        return True
+    if stripped.endswith((".", ";", ":")) and len(stripped.split()) >= 5:
+        return True
+    return False
+
+
 def looks_like_real_unit_start(stream, index):
     stripped = clean_line(stream[index][1])
-    if not (match_para_heading(stripped) or match_annex_heading(stripped)):
+    para_match = match_para_heading(stripped)
+    annex_match = match_annex_heading(stripped)
+    if not (para_match or annex_match):
+        return False
+    if previous_line_suggests_continuation(stream, index):
         return False
     lookahead = next_significant_lines(stream, index)
     if not lookahead:
         return False
     if is_structure_listing_line(lookahead[0]):
         return False
-    if len(lookahead) > 1 and is_structure_listing_line(lookahead[1]):
-        return False
+    heading_has_inline_title = bool((para_match or annex_match).group(2))
+    title_line_skipped = False
     for line in lookahead:
         if is_structure_listing_line(line):
             return False
-        if SUBSECTION_RE.search(line):
+        if heading_has_inline_title:
+            if looks_like_body_text_line(line):
+                return True
+            continue
+        if not title_line_skipped and not looks_like_strong_body_text_line(line):
+            title_line_skipped = True
+            continue
+        if looks_like_strong_body_text_line(line):
             return True
-    return True
+    return False
 
 
 def first_real_unit_start_index(stream):
@@ -441,9 +622,10 @@ def detect_paras_across_pages(page_text_map):
     in_annexes = False
     seen_paragraph = False
 
-    for page_idx, line in filtered_document_lines(page_text_map):
+    stream = filtered_document_lines(page_text_map)
+    for index, (page_idx, line) in enumerate(stream):
         stripped = clean_line(line)
-        if match_annex_heading(stripped):
+        if match_annex_heading(stripped) and looks_like_real_unit_start(stream, index):
             if not seen_paragraph:
                 continue
             if current is not None:
@@ -456,7 +638,7 @@ def detect_paras_across_pages(page_text_map):
             continue
 
         m = match_para_heading(stripped)
-        if m:
+        if m and looks_like_real_unit_start(stream, index):
             seen_paragraph = True
             if current is not None:
                 current["text"] = "\n".join(current["lines"]).strip()
@@ -486,22 +668,46 @@ def detect_annexes_across_pages(page_text_map):
     results = []
     current = None
     seen_paragraph = False
+    max_annex_order_by_kind = {}
 
-    for page_idx, line in filtered_document_lines(page_text_map):
+    stream = filtered_document_lines(page_text_map)
+    for index, (page_idx, line) in enumerate(stream):
         stripped = clean_line(line)
-        if match_para_heading(stripped):
+        if match_para_heading(stripped) and looks_like_real_unit_start(stream, index):
             seen_paragraph = True
         m = match_annex_heading(stripped)
-        if m:
+        if m and looks_like_real_unit_start(stream, index):
             if not seen_paragraph:
+                continue
+            label = m.group(1).strip()
+            kind = annex_key_kind(label)
+            order_value = annex_order_value(label)
+            max_seen_order = max_annex_order_by_kind.get(kind)
+            is_backward_or_repeat = (
+                current is not None
+                and order_value is not None
+                and max_seen_order is not None
+                and order_value <= max_seen_order
+            )
+            if (
+                current is not None
+                and (same_annex_label(current.get("label"), label) or is_backward_or_repeat)
+            ):
+                current["lines"].append(line)
+                current["line_pages"].append(page_idx)
+                current["end_page"] = page_idx
                 continue
             if current is not None:
                 current["text"] = "\n".join(current["lines"]).strip()
                 results.append(current)
+            if order_value is not None and (
+                max_seen_order is None or order_value > max_seen_order
+            ):
+                max_annex_order_by_kind[kind] = order_value
             current = {
                 "start_page": page_idx,
                 "end_page": page_idx,
-                "label": m.group(1).strip(),
+                "label": label,
                 "title": (m.group(2) or "").strip() or None,
                 "lines": [line],
                 "line_pages": [page_idx],
@@ -533,7 +739,7 @@ def split_into_subsections(para_text):
     preamble_lines = []
 
     for line in lines:
-        m = SUBSECTION_RE.search(line)
+        m = SUBSECTION_START_RE.match(clean_line(line))
         if m:
             if current_lines:
                 subsections.append((current_idx, "\n".join(current_lines).strip()))
@@ -629,6 +835,133 @@ def merge_page_ranges(page_ranges):
     }
 
 
+def page_ranges_overlap(left, right):
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    left_start = left.get("start")
+    left_end = left.get("end")
+    right_start = right.get("start")
+    right_end = right.get("end")
+    if not all(isinstance(value, int) for value in (left_start, left_end, right_start, right_end)):
+        return False
+    return left_start <= right_end and right_start <= left_end
+
+
+def choose_disambiguated_id(old_id, replacements, item=None):
+    candidates = replacements.get(old_id)
+    if not candidates:
+        return old_id
+    if len(candidates) == 1:
+        return candidates[0]["new_id"]
+    item_range = (item or {}).get("page_range") if isinstance(item, dict) else None
+    for candidate in candidates:
+        if page_ranges_overlap(item_range, candidate.get("page_range")):
+            return candidate["new_id"]
+    return candidates[0]["new_id"]
+
+
+def make_unique_entity_ids(items, id_key, global_key, id_prefix):
+    replacements = {}
+    used_ids = set()
+    for item in items:
+        old_id = item.get(id_key)
+        if not old_id:
+            continue
+        base_global_key = item.get(global_key)
+        if not base_global_key and old_id.startswith(id_prefix):
+            base_global_key = old_id[len(id_prefix):]
+        base_global_key = base_global_key or old_id
+        new_global_key = base_global_key
+        new_id = "{}{}".format(id_prefix, new_global_key)
+        if new_id in used_ids:
+            new_global_key = unique_global_key(base_global_key, used_ids, id_prefix)
+            new_id = "{}{}".format(id_prefix, new_global_key)
+            item["disambiguated_from_id"] = old_id
+            item["disambiguated_from_global_key"] = item.get(global_key) or base_global_key
+            item[global_key] = new_global_key
+            item[id_key] = new_id
+        else:
+            item[global_key] = new_global_key
+            item[id_key] = new_id
+        used_ids.add(new_id)
+        replacements.setdefault(old_id, []).append(
+            {
+                "new_id": new_id,
+                "page_range": item.get("page_range"),
+            }
+        )
+    return replacements
+
+
+def disambiguate_document_ids(doc_obj, issues):
+    """Make extracted node IDs unique inside a document.
+
+    Some federal PDFs bundle several legal texts or formular-like repeats that
+    legitimately reuse paragraph/table numbers. The structural detector should
+    still improve over time, but raw extraction must never emit duplicate IDs
+    because the graph layer depends on stable primary keys.
+    """
+    structural_units = doc_obj.get("structural_units") or []
+    chunks = doc_obj.get("chunks") or []
+
+    unit_replacements = make_unique_entity_ids(
+        structural_units,
+        "unit_id",
+        "global_key",
+        "unit_",
+    )
+
+    for unit in structural_units:
+        parent_id = unit.get("parent_unit_id")
+        if parent_id:
+            unit["parent_unit_id"] = choose_disambiguated_id(parent_id, unit_replacements, unit)
+        child_ids = unit.get("child_unit_ids")
+        if isinstance(child_ids, list):
+            resolved = []
+            for child_id in child_ids:
+                candidates = unit_replacements.get(child_id)
+                if candidates and len(candidates) > 1:
+                    resolved.extend(candidate["new_id"] for candidate in candidates)
+                else:
+                    resolved.append(choose_disambiguated_id(child_id, unit_replacements, unit))
+            unit["child_unit_ids"] = list(dict.fromkeys(resolved))
+
+    for chunk in chunks:
+        unit_id = chunk.get("unit_id")
+        if unit_id:
+            chunk["unit_id"] = choose_disambiguated_id(unit_id, unit_replacements, chunk)
+
+    chunk_replacements = make_unique_entity_ids(
+        chunks,
+        "chunk_id",
+        "global_key",
+        "chunk_",
+    )
+
+    for chunk in chunks:
+        parent_id = chunk.get("parent_chunk_id")
+        if parent_id:
+            chunk["parent_chunk_id"] = choose_disambiguated_id(parent_id, chunk_replacements, chunk)
+        child_ids = chunk.get("child_chunk_ids")
+        if isinstance(child_ids, list):
+            resolved = []
+            for child_id in child_ids:
+                candidates = chunk_replacements.get(child_id)
+                if candidates and len(candidates) > 1:
+                    resolved.extend(candidate["new_id"] for candidate in candidates)
+                else:
+                    resolved.append(choose_disambiguated_id(child_id, chunk_replacements, chunk))
+            chunk["child_chunk_ids"] = list(dict.fromkeys(resolved))
+
+    for issue in issues:
+        target_unit_id = issue.get("target_unit_id")
+        if target_unit_id:
+            issue["target_unit_id"] = choose_disambiguated_id(target_unit_id, unit_replacements, issue)
+        target_chunk_id = issue.get("target_chunk_id")
+        if target_chunk_id:
+            issue["target_chunk_id"] = choose_disambiguated_id(target_chunk_id, chunk_replacements, issue)
+
+
 def split_annex_into_chunks(annex, fitz_word_pages=None, fitz_page_lines=None):
     """Split Anlage text into text and table blocks.
 
@@ -645,19 +978,44 @@ def split_annex_into_chunks(annex, fitz_word_pages=None, fitz_page_lines=None):
 
     chunks = []
     current = None
-    heading_re = re.compile(r"^(Tabelle\s+\d+[a-z]?\s*:?.*)$")
     has_explicit_table_heading = any(
-        heading_re.match(line.strip())
+        match_table_heading(line.strip())
         for line in annex_lines
     )
+    allow_implicit_tables = not has_explicit_table_heading and not annex_looks_like_form(annex_lines)
     implicit_table_count = 0
     for line_idx, (line, page_idx) in enumerate(zip(annex_lines, annex_line_pages)):
         stripped = line.strip()
-        match = heading_re.match(stripped)
+        if (
+            current is not None
+            and current.get("chunk_type") == "table_block"
+            and table_block_should_end_before_line(stripped)
+        ):
+            chunks.append(finalize_annex_chunk(current))
+            current = {
+                "label": None,
+                "chunk_type": "annex_text",
+                "lines": [line],
+                "line_pages": [page_idx],
+            }
+            continue
+        match = match_table_heading(stripped)
         if match:
+            if looks_like_table_heading_list(annex_lines, line_idx):
+                if current is None:
+                    current = {
+                        "label": None,
+                        "chunk_type": "annex_text",
+                        "lines": [line],
+                        "line_pages": [page_idx],
+                    }
+                else:
+                    current["lines"].append(line)
+                    current["line_pages"].append(page_idx)
+                continue
             if current is not None:
                 chunks.append(finalize_annex_chunk(current))
-            label = match.group(1)
+            label = stripped
             current = {
                 "label": label,
                 "chunk_type": "table_block",
@@ -666,7 +1024,7 @@ def split_annex_into_chunks(annex, fitz_word_pages=None, fitz_page_lines=None):
             }
             continue
         if (
-            not has_explicit_table_heading
+            allow_implicit_tables
             and
             is_implicit_annex_table_header(annex_lines, line_idx)
             and implicit_annex_table_has_grid_geometry(
@@ -704,20 +1062,103 @@ def split_annex_into_chunks(annex, fitz_word_pages=None, fitz_page_lines=None):
     return [chunk for chunk in chunks if chunk.get("text")]
 
 
+def table_block_should_end_before_line(line):
+    normalized = normalize_for_compare(line)
+    if not normalized:
+        return False
+    return bool(
+        SUBSECTION_START_RE.match(normalized)
+        or looks_like_annex_section_heading(normalized)
+        or match_para_heading(normalized)
+        or match_annex_heading(normalized)
+    )
+
+
+def annex_looks_like_form(lines):
+    normalized_lines = [normalize_for_compare(line) for line in lines if normalize_for_compare(line)]
+    if len(normalized_lines) < 20:
+        return False
+    placeholder_lines = [
+        line for line in normalized_lines
+        if re.search(r"(?:\.\s*){4,}", line) or re.search(r"_{4,}", line)
+    ]
+    checkbox_lines = [line for line in normalized_lines if re.search(r"(?:^|\s)#(?:\s|$)", line)]
+    numbered_field_lines = [
+        line for line in normalized_lines
+        if re.match(r"^\d+(?:\.\d+){1,3}\b", line)
+    ]
+    return (
+        len(placeholder_lines) >= 5
+        or len(checkbox_lines) >= 3
+        or (len(placeholder_lines) >= 3 and len(numbered_field_lines) >= 5)
+    )
+
+
 def is_implicit_annex_table_header(lines, index):
     """Detect table starts where the PDF text has no explicit Tabelle label."""
     if index >= len(lines):
         return False
-    if not looks_like_table_header_line(lines[index]):
+    line = lines[index]
+    previous_line = previous_nonempty_line(lines, index)
+    if (
+        previous_line
+        and not previous_line_allows_implicit_table_start(previous_line)
+        and looks_like_contextual_text_continuation(line)
+    ):
+        return False
+    if looks_like_annex_section_heading(line):
+        return False
+    if looks_like_introductory_clause(line):
+        return False
+    if looks_like_continued_text_fragment(line):
+        return False
+    if not looks_like_table_header_line(line):
         return False
     return has_following_table_rows(lines, index)
+
+
+def previous_nonempty_line(lines, index):
+    for candidate in reversed(lines[:index]):
+        normalized = normalize_for_compare(candidate)
+        if normalized:
+            return normalized
+    return None
+
+
+def previous_line_allows_implicit_table_start(line):
+    normalized = normalize_for_compare(line)
+    if not normalized:
+        return True
+    return bool(
+        looks_like_introductory_clause(normalized)
+        or looks_like_annex_section_heading(normalized)
+        or match_para_heading(normalized)
+        or match_annex_heading(normalized)
+    )
+
+
+def looks_like_contextual_text_continuation(line):
+    normalized = normalize_for_compare(line)
+    tokens = normalized.split()
+    if len(tokens) < 5:
+        return False
+    if looks_like_numeric_category_header(normalized):
+        return False
+    if len([part for part in re.split(r"\s{2,}", normalized) if part.strip()]) >= 2:
+        return False
+    return True
 
 
 def has_following_table_rows(lines, index, window=7):
     lookahead = [normalize_for_compare(line) for line in lines[index + 1 : index + 1 + window]]
     row_like = [
         line for line in lookahead
-        if line and not looks_like_table_header_line(line) and re.search(r"\d|[<>=%]", line)
+        if (
+            line
+            and not looks_like_table_header_line(line)
+            and not re.match(r"^(?:\d+[a-z]?|[a-z])[\.)]\s+", line, re.IGNORECASE)
+            and re.search(r"\d|[<>=%]", line)
+        )
     ]
     return len(row_like) >= 2
 
@@ -777,8 +1218,56 @@ def looks_like_table_header_line(line):
     spaced_cells = [part for part in re.split(r"\s{2,}", normalized) if part.strip()]
     if len(spaced_cells) >= 2:
         return True
+    if looks_like_numeric_category_header(normalized):
+        return True
     tokens = normalized.split()
     return 2 <= len(tokens) <= 10 and not re.search(r"\d|[<>=%]", normalized)
+
+
+def looks_like_numeric_category_header(line):
+    tokens = normalize_for_compare(line).split()
+    if len(tokens) < 3 or len(tokens) > 8 or re.search(r"[,<>=%]", line):
+        return False
+    numeric_tokens = [token for token in tokens if re.fullmatch(r"\d+[a-z]?", token, re.IGNORECASE)]
+    if len(numeric_tokens) < 2:
+        return False
+    text_tokens = [token for token in tokens if not re.fullmatch(r"\d+[a-z]?", token, re.IGNORECASE)]
+    return bool(text_tokens) and max(len(token) for token in text_tokens) >= 5
+
+
+def looks_like_annex_section_heading(line):
+    normalized = normalize_for_compare(line)
+    if not normalized:
+        return False
+    return bool(
+        re.match(r"^Teil\s+[A-ZÄÖÜ]\b", normalized)
+        or re.match(r"^[A-ZÄÖÜ]\s+\D", normalized)
+    )
+
+
+def looks_like_introductory_clause(line):
+    normalized = normalize_for_compare(line)
+    if not normalized.endswith(":"):
+        return False
+    if len([part for part in re.split(r"\s{2,}", normalized) if part.strip()]) >= 2:
+        return False
+    return True
+
+
+def looks_like_continued_text_fragment(line):
+    normalized = normalize_for_compare(line)
+    tokens = normalized.split()
+    if len(tokens) < 5:
+        return False
+    if "," in normalized:
+        return True
+    return bool(
+        re.search(
+            r"\b(?:nach|von|vom|für|mit|als|aus|in|im|der|die|das|des|den|und|oder|Anhang|Teil)$",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
 
 
 def infer_table_columns(header_text):
@@ -852,6 +1341,9 @@ def positioned_row_text(row):
 
 def is_material_class_header_row(row, parameter_dim_row=None):
     if parameter_dim_row is None:
+        return False
+    text = positioned_row_text(row)
+    if not text or PAGE_HEADER_RE.match(text) or is_table_label_row(row):
         return False
     return material_header_columns(row, parameter_dim_row) is not None
 
@@ -1112,7 +1604,11 @@ def find_matching_row_index(rows, targets, reverse=False):
             row_text = positioned_row_text(row)
             if not row_text:
                 continue
-            if target == row_text or target in row_text or row_text in target:
+            if (
+                target == row_text
+                or target in row_text
+                or (len(row_text) >= 8 and row_text in target)
+            ):
                 return idx
     return None
 
@@ -1362,6 +1858,12 @@ def append_grid_cells(target, cells):
 
 def grid_row_to_mapping(columns, cells):
     return {column: cell for column, cell in zip(columns, cells)}
+
+
+def grid_key_column_count(columns):
+    if len(columns) <= 2:
+        return 1
+    return min(2, len(columns))
 
 
 def parse_table_title_from_text(table_text, fallback):
@@ -1748,6 +2250,10 @@ def parse_geometric_grid_table(table, block, fitz_word_pages, fitz_page_lines=No
             first_page_idx,
             last_page_idx,
         )
+        if page_idx == first_page_idx and block.get("label") and not block.get("is_implicit_table"):
+            explicit_label_idx = find_matching_row_index(page_rows, [block["label"]])
+            if explicit_label_idx is not None:
+                start_idx = max(start_idx, explicit_label_idx + 1)
 
         grid_infos = []
         for row_idx in range(start_idx, end_idx):
@@ -1756,7 +2262,7 @@ def parse_geometric_grid_table(table, block, fitz_word_pages, fitz_page_lines=No
             if not text or PAGE_HEADER_RE.match(text):
                 continue
             positions = vertical_grid_positions_at_y(page_lines, row_center_y(row))
-            if len(positions) < 4:
+            if len(positions) < 3:
                 continue
             if selected_positions is None:
                 selected_positions = positions
@@ -1794,7 +2300,7 @@ def parse_geometric_grid_table(table, block, fitz_word_pages, fitz_page_lines=No
                 if len(cells) != len(columns):
                     continue
 
-                key_width = min(2, len(cells))
+                key_width = grid_key_column_count(columns)
                 has_key = any(cells[:key_width])
                 current_has_key = bool(current and any(current[:key_width]))
                 if current is None:
@@ -1811,7 +2317,7 @@ def parse_geometric_grid_table(table, block, fitz_word_pages, fitz_page_lines=No
 
     flush_current()
 
-    if not parsed_any_grid or not columns or not rows or len(columns) < 3:
+    if not parsed_any_grid or not columns or not rows or len(columns) < 2:
         return None
 
     return {
@@ -1939,8 +2445,9 @@ def assign_nested_table_values(row_obj, row, value_centers, value_columns, page_
             if idx >= len(value_columns):
                 continue
             column = value_columns[idx]
-            if row_obj[column]:
-                row_obj[column] = "{} {}".format(row_obj[column], text).strip()
+            current_value = row_obj.get(column, "")
+            if current_value:
+                row_obj[column] = "{} {}".format(current_value, text).strip()
             else:
                 row_obj[column] = text
 
@@ -2059,6 +2566,7 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
             starts_new = first_word[0] < marker_right + 2 and is_nested_table_row_marker(first_word[4])
             if starts_new:
                 if current is not None:
+                    current.setdefault(row_label_key, "")
                     current[row_label_key] = normalize_for_compare(current[row_label_key])
                     rows.append(current)
                     row_page_ranges.append(current_page_range)
@@ -2083,6 +2591,7 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
                 ]
                 current_page_range = merge_page_ranges([current_page_range, page_range_from_page(page_idx + 1)])
             if description_words:
+                current.setdefault(row_label_key, "")
                 current[row_label_key] = normalize_for_compare(
                     "{} {}".format(current[row_label_key], " ".join(description_words))
                 )
@@ -2096,6 +2605,7 @@ def parse_geometric_symbol_table(table, block, fitz_word_pages, fitz_page_lines=
             )
 
     if current is not None:
+        current.setdefault(row_label_key, "")
         current[row_label_key] = normalize_for_compare(current[row_label_key])
         rows.append(current)
         row_page_ranges.append(current_page_range)
@@ -2465,6 +2975,12 @@ def add_table_from_block(
         ]
 
     for spec in unit_specs:
+        existing_unit_ids = {
+            unit.get("unit_id")
+            for unit in structural_units
+            if unit.get("unit_id")
+        }
+        spec["global_key"] = unique_global_key(spec["global_key"], existing_unit_ids, "unit_")
         table_unit_id = "unit_{}".format(spec["global_key"])
         if table_unit_id not in annex_unit_obj["child_unit_ids"]:
             annex_unit_obj["child_unit_ids"].append(table_unit_id)
@@ -2573,6 +3089,10 @@ def detect_waste_codes(page_text):
         if m:
             waste_code = m.group(1).strip()
             waste_text = m.group(2).strip()
+            if not waste_code.endswith("*") and re.match(r"^(?:bis|fallen|fällt|faellt|und|oder|sowie)\b", waste_text, re.IGNORECASE):
+                continue
+            if len(waste_text) < 5:
+                continue
             results.append((waste_code, waste_text, line.strip()))
     return results
 
@@ -2826,9 +3346,9 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None, rule_s
         end_page_num = annex["end_page"]
         label = annex["label"]
         title_text = annex.get("title")
-        number = label.replace("Anlage", "").strip()
+        number = annex_number(label)
         annex_text = annex["text"]
-        unit_global_key = unit_slug(document_global_key, "anlage", number)
+        unit_global_key = unit_slug(document_global_key, annex_key_kind(label), number)
         unit_id = "unit_{}".format(unit_global_key)
         unit_citation = legal_citation(citation_prefix, "annex", label, title_text)
         page_id = pages[page_num]["page_id"]
@@ -2859,6 +3379,12 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None, rule_s
         structural_units.append(unit_obj)
 
         annex_chunks = split_annex_into_chunks(annex, fitz_word_pages, fitz_page_lines)
+        unlabeled_text_total = sum(
+            1
+            for annex_chunk in annex_chunks
+            if annex_chunk["chunk_type"] != "table_block" and not annex_chunk["label"]
+        )
+        unlabeled_text_counter = 0
         for chunk_idx, annex_chunk in enumerate(annex_chunks):
             if annex_chunk["chunk_type"] == "table_block":
                 add_table_from_block(
@@ -2880,11 +3406,21 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None, rule_s
                 )
                 continue
 
-            label_part = annex_chunk["label"] or "text"
+            if annex_chunk["label"]:
+                label_part = annex_chunk["label"]
+            else:
+                unlabeled_text_counter += 1
+                label_part = (
+                    "text"
+                    if unlabeled_text_total <= 1
+                    else "text_{}".format(unlabeled_text_counter)
+                )
             chunk_global_key = chunk_slug(unit_global_key, label_part)
             chunk_id = "chunk_{}".format(chunk_global_key)
             if annex_chunk["label"]:
                 chunk_citation = "{} {}".format(unit_citation, annex_chunk["label"])
+            elif unlabeled_text_total > 1:
+                chunk_citation = "{} Text {}".format(unit_citation, unlabeled_text_counter)
             else:
                 chunk_citation = unit_citation
             chunk_text = annex_chunk["text"]
@@ -3012,6 +3548,7 @@ def extract_document(pdf_path, output_base_dir=None, pages_root_dir=None, rule_s
             **doc_metadata,
         },
     }
+    disambiguate_document_ids(doc_obj, issues)
 
     return doc_obj, issues
 

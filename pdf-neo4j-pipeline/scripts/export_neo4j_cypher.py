@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+COMMON_NODE_LABEL = "GraphNode"
 
 COMMON_CONTENT_PROPERTIES = {
     "global_key",
@@ -28,11 +29,15 @@ NEO4J_NODE_PROPERTY_ALLOWLIST = {
         "global_key",
         "title",
         "short_title",
+        "full_title",
+        "full_citation",
         "canonical_citation",
+        "citation_prefix",
         "abbreviation",
         "source_pdf",
         "sha256",
         "page_count",
+        "date_enacted",
     },
     "StructuralUnit": COMMON_CONTENT_PROPERTIES | {
         "unit_type",
@@ -185,7 +190,7 @@ def emit_node_batch(lines: List[str], labels: Tuple[str, ...], rows: List[Dict[s
         for row in rows
     ]
     lines.append("UNWIND {} AS row".format(cypher_value(safe_rows)))
-    lines.append("MERGE (n{} {{graph_id: row.id}})".format(label_clause(labels)))
+    lines.append("CREATE (n{} {{graph_id: row.id}})".format(label_clause(labels)))
     lines.append("SET n += row.properties, n.graph_id = row.id;")
     lines.append("")
 
@@ -201,14 +206,10 @@ def emit_relationship_batch(lines: List[str], rel_type: str, rows: List[Dict[str
         for row in rows
     ]
     lines.append("UNWIND {} AS row".format(cypher_value(safe_rows)))
-    lines.append("MATCH (start {graph_id: row.start_node_id})")
-    lines.append("MATCH (end {graph_id: row.end_node_id})")
-    lines.append(
-        "MERGE (start)-[r:{} {{rel_id: row.id}}]->(end)".format(
-            cypher_identifier(rel_type)
-        )
-    )
-    lines.append("SET r += row.properties, r.rel_id = row.id;")
+    lines.append("MATCH (start:{} {{graph_id: row.start_node_id}})".format(cypher_identifier(COMMON_NODE_LABEL)))
+    lines.append("MATCH (end:{} {{graph_id: row.end_node_id}})".format(cypher_identifier(COMMON_NODE_LABEL)))
+    lines.append("CREATE (start)-[r:{}]->(end)".format(cypher_identifier(rel_type)))
+    lines.append("SET r = row.properties, r.rel_id = row.id;")
     lines.append("")
 
 
@@ -224,10 +225,15 @@ def build_cypher(graph: Dict[str, Any], batch_size: int) -> str:
     lines.append("")
     nodes_by_labels: Dict[Tuple[str, ...], List[Dict[str, Any]]] = defaultdict(list)
     for node in graph.get("nodes") or []:
-        labels = tuple(label for label in (node.get("labels") or []) if label != "ContentNode")
+        labels = tuple(
+            sorted(
+                {COMMON_NODE_LABEL}
+                | {label for label in (node.get("labels") or []) if label != "ContentNode"}
+            )
+        )
         nodes_by_labels[labels].append(node)
 
-    constraint_labels = sorted({label for labels in nodes_by_labels for label in labels})
+    constraint_labels = [COMMON_NODE_LABEL]
     for label in constraint_labels:
         lines.append("CREATE CONSTRAINT {} IF NOT EXISTS".format(cypher_identifier(constraint_name_for_label(label))))
         lines.append("FOR (n:{}) REQUIRE n.graph_id IS UNIQUE;".format(cypher_identifier(label)))

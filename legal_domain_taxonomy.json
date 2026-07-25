@@ -1,0 +1,42 @@
+{
+  "schema_version": "0.1.0",
+  "fields": [
+    "primary_legal_domain",
+    "primary_legal_subdomain",
+    "legal_domains",
+    "legal_subdomains",
+    "legal_topics",
+    "classification_confidence",
+    "classification_source"
+  ],
+  "classification_sources": [
+    "deterministic_title",
+    "deterministic_manifest",
+    "llm_draft",
+    "llm_reviewed",
+    "manual",
+    "unknown"
+  ],
+  "domains": {
+    "verfassungsrecht": ["staatsorganisation", "grundrechte", "wahlrecht", "parlamentsrecht", "sonstiges"],
+    "verwaltungsrecht": ["allgemeines_verwaltungsrecht", "verwaltungsverfahren", "verwaltungsvollstreckung", "oeffentlicher_dienst", "kommunalrecht", "sonstiges"],
+    "umweltrecht": ["abfallrecht", "immissionsschutzrecht", "wasserrecht", "naturschutzrecht", "bodenschutzrecht", "chemikalienrecht", "klimaschutzrecht", "sonstiges"],
+    "baurecht_raumordnung": ["bauplanungsrecht", "bauordnungsrecht", "raumordnung", "wohnungswesen", "sonstiges"],
+    "wirtschaftsrecht": ["gesellschaftsrecht", "handelsrecht", "gewerberecht", "aussenwirtschaft", "vergaberecht", "finanzmarktaufsicht", "wettbewerbsrecht", "sonstiges"],
+    "arbeits_sozialrecht": ["arbeitsrecht", "arbeitsschutz", "sozialversicherung", "rentenrecht", "pflegeversicherung", "krankenversicherung", "arbeitsfoerderung", "sonstiges"],
+    "steuer_finanzrecht": ["steuerrecht", "zollrecht", "haushaltsrecht", "abgabenrecht", "finanzausgleich", "sonstiges"],
+    "zivilrecht": ["buergerliches_recht", "familienrecht", "erbrecht", "mietrecht", "verbraucherschutz", "sonstiges"],
+    "strafrecht_ordnungswidrigkeiten": ["strafrecht", "nebenstrafrecht", "ordnungswidrigkeitenrecht", "strafvollzug", "sonstiges"],
+    "prozessrecht_gerichtsverfassung": ["zivilprozessrecht", "strafprozessrecht", "verwaltungsprozessrecht", "arbeitsgerichtsverfahren", "sozialgerichtsverfahren", "gerichtsverfassung", "sonstiges"],
+    "gesundheitsrecht": ["arzneimittelrecht", "medizinprodukterecht", "aerzte_approbation", "heilberufe", "krankenhausrecht", "infektionsschutz", "sonstiges"],
+    "verkehr_transportrecht": ["strassenverkehr", "schienenverkehr", "luftverkehr", "schifffahrt", "gefahrgutrecht", "fahrzeugzulassung", "sonstiges"],
+    "energie_infrastrukturrecht": ["energierecht", "telekommunikationsinfrastruktur", "postrecht", "netzinfrastruktur", "sonstiges"],
+    "agrar_ernaehrungsrecht": ["agrarrecht", "lebensmittelrecht", "futtermittelrecht", "tierschutz_tiergesundheit", "forstrecht", "sonstiges"],
+    "bildung_wissenschaft_kultur": ["bildungsrecht", "hochschulrecht", "wissenschaftsrecht", "kulturrecht", "sonstiges"],
+    "innen_sicherheit_migration": ["polizeirecht", "bevoelkerungsschutz", "migrationsrecht", "aufenthaltsrecht", "datenschutz_inneres", "sonstiges"],
+    "aussen_eu_voelkerrecht": ["eu_recht", "voelkerrecht", "internationale_abkommen", "auswaertiger_dienst", "sonstiges"],
+    "digital_telekommunikation_medien": ["datenschutzrecht", "telekommunikationsrecht", "medienrecht", "it_sicherheitsrecht", "digitalregulierung", "sonstiges"],
+    "verteidigung": ["wehrrecht", "beschaffung_ruestung", "soldatenrecht", "sonstiges"],
+    "sonstiges_unclassified": ["sonstiges"]
+  }
+}

@@ -140,9 +140,9 @@ def default_table_parser_registry() -> TableParserRegistry:
     return TableParserRegistry(
         [
             HierarchicalHeaderTableParser(),
-            MultiPanelContinuationTableParser(),
             GridTableParser(),
             KeyValueTableParser(),
+            MultiPanelContinuationTableParser(),
             TextFallbackTableParser(),
         ]
     )
