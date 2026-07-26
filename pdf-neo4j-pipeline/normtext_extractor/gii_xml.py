@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree as ET
+from xml.parsers import expat
 
 from normtext_extractor.gii_xml_tables import (
     element_text,
@@ -27,6 +28,10 @@ TABLE_CUE_RE = re.compile(
     r"^\s*(?P<continuation>Fortsetzung\s+)?Tabelle\s+"
     r"(?P<number>\d+[a-z]?)\s*:?\s*(?P<title>.*)$",
     re.IGNORECASE | re.DOTALL,
+)
+UNAVAILABLE_TABLE_RE = re.compile(
+    r"\bnicht\s+darstellbar\w*\b",
+    re.IGNORECASE,
 )
 TOC_LABELS = {"inhaltsübersicht", "inhaltsverzeichnis"}
 FORMULA_LABELS = {
@@ -61,6 +66,7 @@ MAX_XML_BYTES = 256 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 20_000
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_MEMBER_COMPRESSION_RATIO = 1_000
+GII_XML_EXTRACTOR_VERSION = "1.0.0"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -90,6 +96,12 @@ def slugify(value: str) -> str:
 
 def _clean_text(value: Optional[str]) -> str:
     return normalize_inline_text(value or "")
+
+
+def _asset_description(element: ET.Element) -> str:
+    """Return visible asset metadata, ignoring whitespace-only attributes."""
+
+    return _clean_text(element.get("title")) or _clean_text(element.get("alt"))
 
 
 def _child_text(parent: Optional[ET.Element], path: str) -> str:
@@ -218,6 +230,52 @@ def read_gii_xml_package(path: os.PathLike[str] | str) -> Dict[str, Any]:
     }
 
 
+class _ForbiddenXMLDeclaration(Exception):
+    """Internal sentinel raised by the hardened XML preflight parser."""
+
+
+def _reject_dtd_and_entity_declarations(xml_bytes: bytes) -> None:
+    """Reject active DTD/entity declarations without resolving resources.
+
+    Expat detects the XML encoding itself, including BOM-marked UTF-16,
+    so this check cannot be bypassed by spelling declaration bytes in a
+    non-ASCII encoding.  Official GII files reference ``gii-norm.dtd`` through
+    an inert external DOCTYPE, which is allowed, but parameter-entity parsing
+    stays disabled and internal/entity callbacks fail closed before
+    ElementTree builds a tree.
+    """
+
+    parser = expat.ParserCreate()
+
+    def reject(*_args: Any) -> None:
+        raise _ForbiddenXMLDeclaration
+
+    def doctype(
+        _name: str,
+        system_id: Optional[str],
+        public_id: Optional[str],
+        has_internal_subset: int,
+    ) -> None:
+        if has_internal_subset or not (system_id or public_id):
+            reject()
+
+    parser.StartDoctypeDeclHandler = doctype
+    parser.EntityDeclHandler = reject
+    parser.UnparsedEntityDeclHandler = reject
+    parser.ExternalEntityRefHandler = reject
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    try:
+        parser.Parse(xml_bytes, True)
+    except _ForbiddenXMLDeclaration as exc:
+        raise ValueError(
+            "GII XML DTD/entity declarations are not supported"
+        ) from exc
+    except expat.ExpatError:
+        # ElementTree below remains the canonical source of parse diagnostics.
+        # The security preflight only needs to fail explicitly on declarations.
+        return
+
+
 def _mixed_events(node: ET.Element) -> Iterable[Tuple[str, Any]]:
     """Yield text/table/asset events from mixed content in source order."""
     if node.text:
@@ -232,7 +290,7 @@ def _mixed_events(node: ET.Element) -> Iterable[Tuple[str, Any]]:
                     "kind": child.tag.lower(),
                     "source": child.get("SRC"),
                     "preview": child.get("PREVIEW"),
-                    "title": child.get("title") or child.get("alt"),
+                    "title": _asset_description(child),
                     "attributes": dict(child.attrib),
                 },
             )
@@ -278,7 +336,7 @@ def _preformatted_text(node: ET.Element) -> str:
                 if reference:
                     parts.append("[{}]".format(reference))
             elif child.tag == "IMG":
-                description = child.get("alt") or child.get("title")
+                description = _asset_description(child)
                 parts.append(
                     description
                     or "[Bild: {}]".format(child.get("SRC") or "ohne Quelle")
@@ -347,15 +405,56 @@ def _visible_footnote_marker(footnote: ET.Element) -> str:
 
 def _footnote_marker_map(norm: ET.Element) -> Dict[str, str]:
     markers: Dict[str, str] = {}
+    fallback_index = 0
     for path in FOOTNOTE_PATHS[:2]:
         for footnote in norm.findall(path):
             footnote_id = footnote.get("ID")
             if not footnote_id:
                 continue
-            marker = _visible_footnote_marker(footnote)
-            if marker:
-                markers[footnote_id] = marker
+            fallback_index += 1
+            markers[footnote_id] = (
+                _visible_footnote_marker(footnote)
+                or "[Fußnote {}]".format(fallback_index)
+            )
     return markers
+
+
+def _unique_visible_columns(columns: Sequence[Any]) -> List[str]:
+    """Return stable unique column names after visible marker substitution."""
+
+    result: List[str] = []
+    counts: Dict[str, int] = {}
+    for index, raw_name in enumerate(columns):
+        base = normalize_inline_text(str(raw_name or "")) or "column_{}".format(
+            index + 1
+        )
+        counts[base] = counts.get(base, 0) + 1
+        result.append(
+            base
+            if counts[base] == 1
+            else "{}__{}".format(base, counts[base])
+        )
+    return result
+
+
+def _rows_from_visible_matrix(
+    columns: Sequence[str],
+    matrix: Sequence[Any],
+) -> List[Dict[str, str]]:
+    """Rebuild legacy row mappings from the lossless positional matrix."""
+
+    rows: List[Dict[str, str]] = []
+    for raw_row in matrix:
+        row = list(raw_row) if isinstance(raw_row, (list, tuple)) else [raw_row]
+        rows.append(
+            {
+                column: normalize_inline_text(
+                    str((row[index] if index < len(row) else "") or "")
+                )
+                for index, column in enumerate(columns)
+            }
+        )
+    return rows
 
 
 def _replace_footnote_references(value: Any, markers: Dict[str, str]) -> Any:
@@ -370,7 +469,7 @@ def _replace_footnote_references(value: Any, markers: Dict[str, str]) -> Any:
     if isinstance(value, tuple):
         return tuple(_replace_footnote_references(item, markers) for item in value)
     if isinstance(value, dict):
-        return {
+        result = {
             key: (
                 item
                 if key == "source_element"
@@ -378,6 +477,22 @@ def _replace_footnote_references(value: Any, markers: Dict[str, str]) -> Any:
             )
             for key, item in value.items()
         }
+        # CALS rows are a legacy dictionary view derived from the positional
+        # body matrix.  Rebuild that view after marker substitution so visible
+        # column names and row keys cannot drift apart.  This also avoids
+        # data loss if two substituted headings need deterministic suffixes.
+        if (
+            isinstance(result.get("columns"), list)
+            and isinstance(result.get("body_matrix"), list)
+            and isinstance(result.get("rows"), list)
+        ):
+            visible_columns = _unique_visible_columns(result["columns"])
+            result["columns"] = visible_columns
+            result["rows"] = _rows_from_visible_matrix(
+                visible_columns,
+                result["body_matrix"],
+            )
+        return result
     return value
 
 
@@ -387,6 +502,26 @@ def _source_footnote_ids(node: ET.Element) -> List[str]:
     def visit(element: ET.Element) -> None:
         for child in element:
             if child.tag in {"FnArea", "Footnotes"}:
+                continue
+            if child.tag == "FnR":
+                footnote_id = child.get("ID")
+                if footnote_id and footnote_id not in references:
+                    references.append(footnote_id)
+            else:
+                visit(child)
+
+    visit(node)
+    return references
+
+
+def _source_prose_footnote_ids(node: ET.Element) -> List[str]:
+    """Return operative footnote references that occur outside CALS tables."""
+
+    references: List[str] = []
+
+    def visit(element: ET.Element) -> None:
+        for child in element:
+            if child.tag in {"FnArea", "Footnotes", "fussnoten", "table", "TOC"}:
                 continue
             if child.tag == "FnR":
                 footnote_id = child.get("ID")
@@ -489,8 +624,7 @@ def norm_content_blocks(
                                 "kind": content_child.tag.lower(),
                                 "source": content_child.get("SRC"),
                                 "preview": content_child.get("PREVIEW"),
-                                "title": content_child.get("title")
-                                or content_child.get("alt"),
+                                "title": _asset_description(content_child),
                                 "attributes": dict(content_child.attrib),
                                 "source_tag": content_child.tag,
                             }
@@ -531,6 +665,14 @@ def norm_footnotes(norm: ET.Element) -> List[Dict[str, Any]]:
             if not text:
                 continue
             text = _replace_footnote_references(text, marker_map)
+            preformatted_blocks = [
+                _preformatted_text(item)
+                for item in _direct_descendants(element, "pre")
+            ]
+            preformatted_blocks = _replace_footnote_references(
+                preformatted_blocks,
+                marker_map,
+            )
             fallback_index = len(footnotes) + 1
             footnotes.append(
                 {
@@ -543,10 +685,7 @@ def norm_footnotes(norm: ET.Element) -> List[Dict[str, Any]]:
                     "visible_marker": _visible_footnote_marker(element),
                     "text": text,
                     "attributes": dict(element.attrib),
-                    "preformatted_blocks": [
-                        _preformatted_text(item)
-                        for item in _direct_descendants(element, "pre")
-                    ],
+                    "preformatted_blocks": preformatted_blocks,
                 }
             )
     return footnotes
@@ -724,8 +863,47 @@ def _deduplicate_key(base: str, seen: Dict[str, int]) -> str:
     return "{}_part_{}".format(base, seen[base])
 
 
+def _technical_node_id(kind: str, global_key: str, document_id: str) -> str:
+    """Scope a technical node ID while leaving its semantic key unchanged."""
+
+    return "{}_{}__{}".format(kind, global_key, document_id)
+
+
 def _citation(prefix: str, label: str) -> str:
     return "{} {}".format(prefix, label).strip()
+
+
+def _metadata_fallback_text(
+    title: str,
+    abbreviation: str,
+    date_enacted: str,
+    official_sources: Sequence[Dict[str, Any]],
+    status_notes: Sequence[Dict[str, Any]],
+) -> str:
+    """Render official document metadata when GII publishes no norm text."""
+
+    parts = [title]
+    if abbreviation and abbreviation not in title:
+        parts.append("Abkürzung: {}".format(abbreviation))
+    if date_enacted:
+        parts.append("Ausfertigungsdatum: {}".format(date_enacted))
+    for source in official_sources:
+        citation = " ".join(
+            str(value)
+            for value in (source.get("periodical"), source.get("citation"))
+            if value
+        )
+        if citation:
+            parts.append("Amtliche Fundstelle: {}".format(citation))
+    for note in status_notes:
+        value = ": ".join(
+            str(part)
+            for part in (note.get("type"), note.get("comment"))
+            if part
+        )
+        if value:
+            parts.append("Standangabe: {}".format(value))
+    return "\n".join(dict.fromkeys(parts)).strip()
 
 
 def _table_text(columns: Sequence[str], rows: Sequence[Dict[str, Any]]) -> str:
@@ -763,6 +941,7 @@ def _table_cue(text: str) -> Optional[Dict[str, Any]]:
         "label": "Tabelle {}".format(match.group("number")),
         "continuation": bool(match.group("continuation")),
         "title": _clean_text(match.group("title")),
+        "source_text": _clean_text(text),
     }
 
 
@@ -838,7 +1017,7 @@ def _asset_reference_manifest(
             "kind": element.tag.lower(),
             "source": source or None,
             "preview": element.get("PREVIEW"),
-            "title": element.get("title") or element.get("alt"),
+            "title": _asset_description(element),
             "attributes": dict(element.attrib),
             "archive_member": match.get("archive_member") if match else None,
             "sha256": match.get("sha256") if match else None,
@@ -857,8 +1036,7 @@ def extract_document_from_xml(
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """Convert one official GII XML package to the canonical raw document."""
     package = read_gii_xml_package(source_path)
-    if b"<!ENTITY" in package["xml_bytes"].upper():
-        raise ValueError("GII XML with inline entity declarations is not supported")
+    _reject_dtd_and_entity_declarations(package["xml_bytes"])
     try:
         root = ET.fromstring(package["xml_bytes"])
     except ET.ParseError as exc:
@@ -946,6 +1124,7 @@ def extract_document_from_xml(
             if footnote.get("note_kind") == "footnote"
         }
         referenced_ids = set(_source_footnote_ids(norm))
+        prose_referenced_ids = set(_source_prose_footnote_ids(norm))
         missing_definitions = sorted(referenced_ids - definition_ids)
         orphan_definitions = sorted(definition_ids - referenced_ids)
         has_content = bool(blocks or footnotes)
@@ -1027,7 +1206,7 @@ def extract_document_from_xml(
             "{}_{}".format(key_prefix, component),
             seen_unit_keys,
         )
-        unit_id = "unit_{}".format(unit_global_key)
+        unit_id = _technical_node_id("unit", unit_global_key, doc_id)
         legal_citation = _citation(abbreviation, label)
         plain_text_parts = [label, unit_title]
         plain_text_parts.extend(block["text"] for block in blocks if block["type"] == "text")
@@ -1123,6 +1302,13 @@ def extract_document_from_xml(
                 text = block["text"]
                 cue = _table_cue(text)
                 if cue:
+                    cue["source_tag"] = block.get("source_tag")
+                    for additive_field in (
+                        "structured_lists",
+                        "preformatted_blocks",
+                    ):
+                        if block.get(additive_field):
+                            cue[additive_field] = block[additive_field]
                     pending_table = cue
                     last_subsection_chunk = None
                     continue
@@ -1175,7 +1361,11 @@ def extract_document_from_xml(
                     seen_chunk_keys,
                 )
                 chunk = {
-                    "chunk_id": "chunk_{}".format(chunk_global_key),
+                    "chunk_id": _technical_node_id(
+                        "chunk",
+                        chunk_global_key,
+                        doc_id,
+                    ),
                     "global_key": chunk_global_key,
                     "legal_citation": chunk_citation,
                     "display_name": chunk_citation,
@@ -1210,13 +1400,14 @@ def extract_document_from_xml(
             if block["type"] == "asset":
                 last_subsection_chunk = None
                 sequence += 1
+                asset_title = _clean_text(block.get("title"))
                 if block["kind"] == "img":
-                    asset_text = block.get("title") or "[Bild: {}]".format(
+                    asset_text = asset_title or "[Bild: {}]".format(
                         block.get("source") or "ohne Quelle"
                     )
                 else:
                     asset_text = (
-                        block.get("title")
+                        asset_title
                         or block.get("source")
                         or "[Datei]"
                     )
@@ -1227,7 +1418,11 @@ def extract_document_from_xml(
                 )
                 chunks.append(
                     {
-                        "chunk_id": "chunk_{}".format(chunk_global_key),
+                        "chunk_id": _technical_node_id(
+                            "chunk",
+                            chunk_global_key,
+                            doc_id,
+                        ),
                         "global_key": chunk_global_key,
                         "legal_citation": legal_citation,
                         "display_name": legal_citation,
@@ -1266,10 +1461,89 @@ def extract_document_from_xml(
                 continue
             last_subsection_chunk = None
             table = block["table"]
-            if pending_table:
+            explicit_table_cue = _table_cue(table.get("title") or "")
+            pending_placeholder_conflict = bool(
+                pending_table
+                and explicit_table_cue
+                and slugify(pending_table["label"])
+                != slugify(explicit_table_cue["label"])
+                and UNAVAILABLE_TABLE_RE.search(
+                    "{}\n{}".format(
+                        pending_table.get("source_text") or "",
+                        pending_table.get("title") or "",
+                    )
+                )
+            )
+            if pending_placeholder_conflict:
+                placeholder_text = pending_table.get("source_text") or "{}: {}".format(
+                    pending_table["label"],
+                    pending_table.get("title") or "",
+                ).strip()
+                text_block_index += 1
+                sequence += 1
+                chunk_global_key = _deduplicate_key(
+                    "{}_text_{}".format(unit_global_key, text_block_index),
+                    seen_chunk_keys,
+                )
+                placeholder_chunk = {
+                    "chunk_id": _technical_node_id(
+                        "chunk",
+                        chunk_global_key,
+                        doc_id,
+                    ),
+                    "global_key": chunk_global_key,
+                    "legal_citation": legal_citation,
+                    "display_name": legal_citation,
+                    "chunk_type": (
+                        "annex_text"
+                        if kind in {"annex", "appendix"}
+                        else "provision_text"
+                    ),
+                    "unit_id": unit_id,
+                    "document_global_key": document_global_key,
+                    "parent_chunk_id": None,
+                    "child_chunk_ids": [],
+                    "label": "text_{}".format(text_block_index),
+                    "number": None,
+                    "sequence": sequence,
+                    "source_order": [norm_index, text_block_index],
+                    "page_id": None,
+                    "page_range": None,
+                    "text": placeholder_text,
+                    "text_sha256": sha256_str(placeholder_text),
+                    "evidence_text": unit_text,
+                    "confidence": 1.0,
+                    "review_status": "pending",
+                    "source_xml_norm_index": norm_index,
+                    "source_xml_block_index": text_block_index,
+                    "source_xml_tag": pending_table.get("source_tag"),
+                    "source_xml_unavailable_table": True,
+                    "source_xml_table_label": pending_table["label"],
+                }
+                for additive_field in (
+                    "structured_lists",
+                    "preformatted_blocks",
+                ):
+                    if pending_table.get(additive_field):
+                        placeholder_chunk[additive_field] = pending_table[
+                            additive_field
+                        ]
+                chunks.append(placeholder_chunk)
+                table_label = explicit_table_cue["label"]
+                table_title = (
+                    explicit_table_cue.get("title")
+                    or table.get("title")
+                    or ""
+                )
+                continuation = bool(explicit_table_cue.get("continuation"))
+            elif pending_table:
                 table_label = pending_table["label"]
                 table_title = pending_table.get("title") or table.get("title") or ""
                 continuation = bool(pending_table.get("continuation"))
+            elif explicit_table_cue:
+                table_label = explicit_table_cue["label"]
+                table_title = explicit_table_cue.get("title") or ""
+                continuation = bool(explicit_table_cue.get("continuation"))
             else:
                 unnamed_table_counter += 1
                 table_label = "Unbezeichnete Tabelle {}".format(unnamed_table_counter)
@@ -1298,7 +1572,8 @@ def extract_document_from_xml(
                     logical_table_by_label[table_key] = record
             pending_table = None
 
-        table_context_by_footnote_id: Dict[str, List[Dict[str, str]]] = {}
+        table_context_by_footnote_id: Dict[str, List[Dict[str, Any]]] = {}
+        next_table_chunk_sequence_by_unit: Dict[str, int] = {}
         for table_index, record in enumerate(table_records, 1):
             table = record["table"]
             table_label = record["label"]
@@ -1307,7 +1582,11 @@ def extract_document_from_xml(
                 "{}_{}".format(unit_global_key, table_component),
                 seen_unit_keys,
             )
-            table_unit_id = "unit_{}".format(table_global_key)
+            table_unit_id = _technical_node_id(
+                "unit",
+                table_global_key,
+                doc_id,
+            )
             table_citation = "{} {}".format(legal_citation, table_label)
             rows = table.get("rows") or []
             columns = table.get("columns") or []
@@ -1372,6 +1651,7 @@ def extract_document_from_xml(
                     {
                         "unit_id": table_unit_id,
                         "legal_citation": table_citation,
+                        "table_index": table_index,
                     }
                 )
             chunk_global_key = _deduplicate_key(
@@ -1380,7 +1660,11 @@ def extract_document_from_xml(
             )
             chunks.append(
                 {
-                    "chunk_id": "chunk_{}".format(chunk_global_key),
+                    "chunk_id": _technical_node_id(
+                        "chunk",
+                        chunk_global_key,
+                        doc_id,
+                    ),
                     "global_key": chunk_global_key,
                     "legal_citation": table_citation,
                     "display_name": table_citation,
@@ -1408,6 +1692,7 @@ def extract_document_from_xml(
                     "table_data": table,
                 }
             )
+            next_table_chunk_sequence_by_unit[table_unit_id] = 2
 
         for footnote_index, footnote in enumerate(footnotes, 1):
             sequence += 1
@@ -1417,32 +1702,59 @@ def extract_document_from_xml(
             )
             table_context = table_contexts[0] if len(table_contexts) == 1 else None
             note_kind = footnote.get("note_kind") or "footnote"
+            referenced_outside_tables = (
+                footnote["footnote_id"] in prose_referenced_ids
+            )
+            table_only_context = (
+                table_context
+                if table_context
+                and note_kind == "footnote"
+                and not referenced_outside_tables
+                else None
+            )
             note_unit_id = (
-                table_context["unit_id"]
-                if table_context and note_kind == "footnote"
+                table_only_context["unit_id"]
+                if table_only_context
                 else unit_id
             )
             note_citation = (
-                table_context["legal_citation"]
-                if table_context and note_kind == "footnote"
+                table_only_context["legal_citation"]
+                if table_only_context
                 else legal_citation
             )
             chunk_type = (
                 "table_note"
-                if table_context and note_kind == "footnote"
+                if table_only_context
                 else note_kind
             )
+            chunk_sequence = sequence
+            chunk_source_order: List[int] = [norm_index, sequence]
+            if table_only_context and chunk_type == "table_note":
+                chunk_sequence = next_table_chunk_sequence_by_unit[
+                    table_only_context["unit_id"]
+                ]
+                next_table_chunk_sequence_by_unit[
+                    table_only_context["unit_id"]
+                ] = chunk_sequence + 1
+                chunk_source_order = [
+                    norm_index,
+                    int(table_only_context["table_index"]),
+                    chunk_sequence - 1,
+                ]
             footnote_key = _deduplicate_key(
                 "{}_{}_{}".format(
                     unit_global_key,
                     slugify(chunk_type),
-                    slugify(footnote["footnote_id"]),
+                    footnote_index,
                 ),
                 seen_chunk_keys,
             )
-            chunks.append(
-                {
-                    "chunk_id": "chunk_{}".format(footnote_key),
+            footnote_chunk = {
+                    "chunk_id": _technical_node_id(
+                        "chunk",
+                        footnote_key,
+                        doc_id,
+                    ),
                     "global_key": footnote_key,
                     "legal_citation": note_citation,
                     "display_name": "{} {}".format(
@@ -1457,11 +1769,15 @@ def extract_document_from_xml(
                     "label": (
                         footnote.get("visible_marker")
                         or footnote.get("marker")
-                        or footnote["footnote_id"]
+                        or (
+                            "Fußnote {}".format(footnote_index)
+                            if note_kind == "footnote"
+                            else "Quellenhinweis {}".format(footnote_index)
+                        )
                     ),
                     "number": footnote_index,
-                    "sequence": sequence,
-                    "source_order": [norm_index, sequence],
+                    "sequence": chunk_sequence,
+                    "source_order": chunk_source_order,
                     "page_id": None,
                     "page_range": None,
                     "text": footnote["text"],
@@ -1471,20 +1787,14 @@ def extract_document_from_xml(
                     "source_xml_footnote_id": footnote["footnote_id"],
                     "source_xml_footnote_attributes": footnote.get("attributes") or {},
                     "source_xml_footnote_marker": footnote.get("visible_marker"),
+                    "source_xml_referenced_outside_tables": (
+                        referenced_outside_tables
+                    ),
                     "preformatted_blocks": footnote.get("preformatted_blocks") or [],
                 }
-            )
-
-    if not structural_units:
-        issues.append(
-            _issue(
-                doc_id,
-                "no_structural_units",
-                "error",
-                "GII XML contains no content-bearing legal units.",
-                package["xml_name"],
-            )
-        )
+            if table_contexts:
+                footnote_chunk["source_xml_table_contexts"] = table_contexts
+            chunks.append(footnote_chunk)
 
     status_notes = []
     for stand in metadata_norm.findall("./metadaten/standangabe"):
@@ -1514,6 +1824,116 @@ def extract_document_from_xml(
         if citation_text:
             full_citation = "{} ({})".format(title, citation_text)
 
+    metadata_only = not structural_units
+    if metadata_only:
+        fallback_label = "Dokumentmetadaten"
+        fallback_global_key = "{}_document_note_metadaten".format(
+            document_global_key
+        )
+        fallback_unit_id = _technical_node_id(
+            "unit",
+            fallback_global_key,
+            doc_id,
+        )
+        fallback_text = _metadata_fallback_text(
+            title,
+            abbreviation,
+            root_meta.get("date_enacted") or "",
+            fundstellen,
+            status_notes,
+        )
+        metadata_norm_index = next(
+            (
+                index
+                for index, norm in enumerate(root.findall("./norm"))
+                if norm is metadata_norm
+            ),
+            0,
+        )
+        fallback_unit = {
+            "unit_id": fallback_unit_id,
+            "global_key": fallback_global_key,
+            "legal_citation": abbreviation,
+            "display_name": "{} {}".format(
+                abbreviation,
+                fallback_label,
+            ).strip(),
+            "document_id": doc_id,
+            "document_key": document_key,
+            "document_global_key": document_global_key,
+            "unit_type": "document_note",
+            "label": fallback_label,
+            "number": None,
+            "title": None,
+            "breadcrumbs": [document_global_key, fallback_label],
+            "parent_unit_id": None,
+            "child_unit_ids": [],
+            "sequence": 1,
+            "source_order": metadata_norm_index,
+            "page_range": None,
+            "text": fallback_text,
+            "text_sha256": sha256_str(fallback_text),
+            "confidence": 1.0,
+            "review_status": "pending",
+            "is_repealed": False,
+            "is_uncertain": False,
+            "uncertainty_reason": None,
+            "hierarchy_rank": None,
+            "source_xml_document_number": root_meta.get("document_number"),
+            "source_xml_build_date": root_meta.get("build_date"),
+            "source_xml_norm_index": metadata_norm_index,
+            "source_xml_division_key": None,
+            "source_xml_fallback_reason": "metadata_only_document",
+        }
+        fallback_chunk_global_key = "{}_text".format(fallback_global_key)
+        fallback_chunk = {
+            "chunk_id": _technical_node_id(
+                "chunk",
+                fallback_chunk_global_key,
+                doc_id,
+            ),
+            "global_key": fallback_chunk_global_key,
+            "legal_citation": abbreviation,
+            "display_name": fallback_unit["display_name"],
+            "chunk_type": "document_note",
+            "unit_id": fallback_unit_id,
+            "document_global_key": document_global_key,
+            "parent_chunk_id": None,
+            "child_chunk_ids": [],
+            "label": fallback_label,
+            "number": None,
+            "sequence": 1,
+            "source_order": [metadata_norm_index, 1],
+            "page_id": None,
+            "page_range": None,
+            "text": fallback_text,
+            "text_sha256": sha256_str(fallback_text),
+            "evidence_text": fallback_text,
+            "confidence": 1.0,
+            "review_status": "pending",
+            "source_xml_norm_index": metadata_norm_index,
+            "source_xml_fallback_reason": "metadata_only_document",
+        }
+        structural_units.append(fallback_unit)
+        chunks.append(fallback_chunk)
+        issues.append(
+            _issue(
+                doc_id,
+                "xml_metadata_only_document",
+                "warning",
+                "Official GII XML contains document metadata but no operative "
+                "norm text; an explicit metadata fallback unit was emitted.",
+                {
+                    "xml_name": package["xml_name"],
+                    "title": title,
+                    "date_enacted": root_meta.get("date_enacted") or None,
+                    "official_sources": fundstellen,
+                },
+                unit_id=fallback_unit_id,
+                chunk_id=fallback_chunk["chunk_id"],
+            )
+        )
+
     doc = {
         "document_id": doc_id,
         "source_pdf": source_pdf,
@@ -1540,6 +1960,7 @@ def extract_document_from_xml(
         "metadata": {
             "source_format": "gii_xml",
             "extractor": "gii_xml",
+            "gii_xml_extractor_version": GII_XML_EXTRACTOR_VERSION,
             "short_title": short_title,
             "official_abbreviation": root_meta.get("official_abbreviation") or None,
             "jurabk": root_meta.get("jurabk") or [],
@@ -1562,6 +1983,7 @@ def extract_document_from_xml(
             "xml_norm_count": len(root.findall("./norm")),
             "xml_unit_count": len(structural_units),
             "xml_chunk_count": len(chunks),
+            "xml_metadata_only": metadata_only,
             "pdf_alignment_status": "not_attempted",
             "pdf_pages": 0,
         },
@@ -1578,6 +2000,10 @@ def extract_package(
     return {
         "schema_version": "1.0.0-draft",
         "phase": "normtext",
+        "extractor": {
+            "name": "gii_xml",
+            "version": GII_XML_EXTRACTOR_VERSION,
+        },
         "source_manifest_entry": source_manifest_entry,
         "documents": [document],
         "review_decisions": [],

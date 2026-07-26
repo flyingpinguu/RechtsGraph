@@ -1,5 +1,89 @@
 # GII XML Migration Plan
 
+## Implementation Result (2026-07-26)
+
+The cutover is implemented on branch `codex/gii-xml-migration`. The
+pre-migration implementation remains recoverable at commit `4341102` and tag
+`pre-gii-xml-migration`.
+
+The reconciled corpus contains 6,133 records:
+
+- 6,125 GII catalog XML packages, all downloaded, validated, and parsed;
+- 5,954 XML records with a matching local PDF;
+- 171 XML-only records, accepted without fabricated page provenance; and
+- 8 PDF-manifest-only records, handled by the explicit legacy fallback.
+
+The 5,970-row PDF manifest reconciles as 5,954 distinct XML matches, 8
+duplicate PDF aliases attached to an already matched XML record, and the 8
+PDF-only records.
+
+The audited XML output contains 139,428 structural units, 324,989 chunks,
+11,567 CALS tables with 236,318 rows, and 4,160 referenced source assets.
+Document-, unit-, and chunk-ID collisions are zero. All source assets are
+present. The three mandatory difficult cases pass:
+
+- `ErsatzbaustoffV Anlage 1 Tabelle 1`: 20 columns and 18 rows;
+- `EGBGB Art 232`: the article and its 12 nested paragraphs are retained; and
+- `AbfKlärV`: the two known rank conflicts remain explicit, classified
+  warnings rather than silent hierarchy damage.
+
+PDF alignment is conservative and secondary. It supplies page evidence to
+95.27% of chunks and 90.88% of structural units. Missing or low-confidence
+alignment never removes XML content.
+
+All nine remaining `POSSIBLE_MISSED_TABLE` warnings were manually traced to
+the source. Seven are title-association warnings whose CALS cells are present;
+two preserve GII's own “table not representable” placeholders where neither
+the XML ZIP nor the matching PDF contains recoverable table data.
+
+Final verification:
+
+- the downloader resumes with 6,125 verified XML packages, 8 explicit
+  `xml_unavailable` PDF-only records, and no process errors;
+- all 137 repository tests pass;
+- the independent corpus audit passes 6,125 documents with zero invariant
+  failure kinds;
+- the generic raw validator reports zero errors (remaining warnings are
+  review/coverage signals);
+- both XML and PDF-fallback batches pass source-, version-, rules-, and
+  page-artifact-aware resume checks; and
+- a 12-document downstream smoke (four XML hard cases plus all eight
+  fallbacks) passes merge, reference extraction, graph validation, ID/edge
+  integrity, and Neo4j Cypher export.
+
+“Authoritative” below is an engineering source-of-truth statement inside this
+pipeline. It does not change the legal status of GII's consolidated texts;
+the promulgated Bundesgesetzblatt remains the official legal publication.
+
+### Why the adapter is still custom
+
+“GII XML adapter” means the schema-specific boundary that translates the
+official GII XML/DTD into this repository's existing canonical graph contract.
+It is not a generic XML parser. Generic document frameworks can parse bytes
+and provide useful PDF layout/OCR primitives, but they do not define the
+project's legal-unit identities, parentage, mixed-content rules, CALS
+semantics, graph keys, or reconciliation with the official GII catalog.
+
+Docling would therefore be useful as an optional alternative implementation
+behind the *PDF evidence/fallback* interface, especially for scans or
+non-GII documents. It would not replace the GII adapter or improve on
+pipeline-authoritative XML as the semantic source. A future Docling adoption
+should be an evidence-based benchmark against the retained PDF extractor, not
+a second semantic source of truth.
+
+### Reproduction
+
+```bash
+cd /Users/christinck/Documents/graph_database/pdf-neo4j-pipeline
+
+./.venv/bin/python scripts/download_gii_xml.py --workers 8 --resume
+./.venv/bin/python scripts/batch_extract_gii_xml.py --workers 8 --resume
+./.venv/bin/python scripts/batch_extract_gii_pdf_fallbacks.py \
+  --workers 2 --resume
+./.venv/bin/python scripts/audit_gii_xml_corpus.py --require-hard-cases
+./.venv/bin/python -m pytest -q
+```
+
 ## Objective
 
 Replace PDF-first semantic extraction for `gesetze-im-internet.de` documents
@@ -27,10 +111,10 @@ other PDF ───> legacy deterministic extractor ─┘
                                   content graph -> reference graph -> Neo4j
 ```
 
-XML is authoritative for text, metadata, legal units, lists, footnotes, and
-table cell/span structure. PDF data is secondary provenance: page numbers,
-bounding boxes, page images, and a fallback for source material absent from
-the XML package.
+XML is the pipeline-authoritative source for text, metadata, legal units,
+lists, footnotes, and table cell/span structure. PDF data is secondary
+provenance: page numbers, bounding boxes, page images, and a fallback for
+source material absent from the XML package.
 
 ## Corpus
 

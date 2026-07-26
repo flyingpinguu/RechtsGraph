@@ -1,11 +1,14 @@
 import hashlib
 import importlib.util
 import json
+import shutil
 import sys
 import zipfile
 from pathlib import Path
 
 import pytest
+
+import normtext_extractor.gii_xml as gii_xml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +88,26 @@ def good_entry(package, relative_package, **updates):
         ],
     }
     entry.update(updates)
+    return entry
+
+
+def write_test_pdf(path, text="§ 1 Zweck\n(1) Ein Testsatz."):
+    fitz = pytest.importorskip("fitz")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_textbox(
+        fitz.Rect(40, 40, 550, 800),
+        text,
+        fontsize=11,
+    )
+    pdf.save(path)
+    pdf.close()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def with_pdf_sha(entry, sha256):
+    entry["pdf_manifest_matches"][0]["sha256"] = sha256
     return entry
 
 
@@ -221,8 +244,11 @@ def test_resume_verifies_existing_source_and_force_regenerates(tmp_path):
         )
     )
     assert initial["status_counts"] == {"ok": 1}
+    assert initial["extractor"]["version"] == batch.EXPECTED_EXTRACTOR_VERSION
     raw_path = output_dir / initial["entries"][0]["output_path"]
     payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert payload["extractor"]["version"] == batch.EXPECTED_EXTRACTOR_VERSION
+    assert payload["batch_extractor"]["version"] == batch.TOOL_VERSION
     payload["test_sentinel"] = True
     batch.atomic_write_json(raw_path, payload)
 
@@ -250,6 +276,143 @@ def test_resume_verifies_existing_source_and_force_regenerates(tmp_path):
     )
     assert forced["status_counts"] == {"ok": 1}
     assert "test_sentinel" not in json.loads(raw_path.read_text(encoding="utf-8"))
+
+
+def test_resume_rejects_deleted_current_source_package(tmp_path):
+    source_dir = tmp_path / "xml-corpus"
+    source_dir.mkdir()
+    relative_package = "documents/batch/source.xml.zip"
+    package = write_package(source_dir, relative_package)
+    manifest_path = source_dir / "manifest.json"
+    write_manifest(manifest_path, [good_entry(package, relative_package)])
+    output_dir = tmp_path / "output"
+    initial = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            workers=1,
+        )
+    )
+    package.unlink()
+
+    resumed = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            workers=1,
+            resume=True,
+        )
+    )
+
+    assert resumed["status_counts"] == {"error": 1}
+    assert resumed["entries"][0]["resume_validation"] == (
+        "current source package is missing"
+    )
+    assert resumed["entries"][0]["error_type"] == "FileNotFoundError"
+    assert (output_dir / initial["entries"][0]["output_path"]).is_file()
+
+
+def test_resume_rejects_replaced_current_source_package(tmp_path):
+    source_dir = tmp_path / "xml-corpus"
+    source_dir.mkdir()
+    relative_package = "documents/batch/source.xml.zip"
+    package = write_package(source_dir, relative_package)
+    manifest_path = source_dir / "manifest.json"
+    write_manifest(manifest_path, [good_entry(package, relative_package)])
+    output_dir = tmp_path / "output"
+    initial = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            workers=1,
+        )
+    )
+    with zipfile.ZipFile(package, "a") as archive:
+        archive.writestr("replacement.txt", "changed package bytes")
+
+    resumed = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            workers=1,
+            resume=True,
+        )
+    )
+
+    assert resumed["status_counts"] == {"error": 1}
+    assert resumed["entries"][0]["resume_validation"] == (
+        "current source package hash differs from the downloader manifest"
+    )
+    assert "hash differs" in resumed["entries"][0]["error"]
+    assert (output_dir / initial["entries"][0]["output_path"]).is_file()
+
+
+def test_resume_reprocesses_after_batch_or_xml_extractor_version_change(
+    tmp_path,
+    monkeypatch,
+):
+    source_dir = tmp_path / "xml-corpus"
+    source_dir.mkdir()
+    relative_package = "documents/batch/source.xml.zip"
+    package = write_package(source_dir, relative_package)
+    manifest_path = source_dir / "manifest.json"
+    write_manifest(manifest_path, [good_entry(package, relative_package)])
+    output_dir = tmp_path / "output"
+    initial = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            workers=1,
+        )
+    )
+    raw_path = output_dir / initial["entries"][0]["output_path"]
+
+    monkeypatch.setattr(batch, "TOOL_VERSION", "1.2.1-test")
+    tool_changed = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            workers=1,
+            resume=True,
+        )
+    )
+    assert tool_changed["status_counts"] == {"ok": 1}
+    assert tool_changed["entries"][0]["resume_validation"] == (
+        "existing output used an obsolete batch extractor"
+    )
+    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert payload["batch_extractor"]["version"] == "1.2.1-test"
+
+    monkeypatch.setattr(batch, "EXPECTED_EXTRACTOR_VERSION", "1.0.1-test")
+    monkeypatch.setattr(
+        gii_xml,
+        "GII_XML_EXTRACTOR_VERSION",
+        "1.0.1-test",
+    )
+    extractor_changed = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            workers=1,
+            resume=True,
+        )
+    )
+    assert extractor_changed["status_counts"] == {"ok": 1}
+    assert extractor_changed["entries"][0]["resume_validation"] == (
+        "existing output used an obsolete XML extractor"
+    )
+    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert payload["extractor"]["version"] == "1.0.1-test"
+    assert payload["documents"][0]["metadata"][
+        "gii_xml_extractor_version"
+    ] == "1.0.1-test"
 
 
 def test_changed_source_package_is_rejected_before_raw_output_is_published(tmp_path):
@@ -296,26 +459,24 @@ def test_existing_batch_requires_explicit_resume_or_force(tmp_path):
 
 
 def test_batch_adds_secondary_pdf_page_numbers_when_matched(tmp_path):
-    fitz = pytest.importorskip("fitz")
     source_dir = tmp_path / "xml-corpus"
     source_dir.mkdir()
     relative_package = "documents/batch/source.xml.zip"
     package = write_package(source_dir, relative_package)
-    manifest_path = source_dir / "manifest.json"
-    write_manifest(manifest_path, [good_entry(package, relative_package)])
 
     pdf_dir = tmp_path / "pdf-corpus"
     pdf_path = pdf_dir / "B" / "0007_batchg.pdf"
-    pdf_path.parent.mkdir(parents=True)
-    pdf = fitz.open()
-    page = pdf.new_page()
-    page.insert_textbox(
-        fitz.Rect(40, 40, 550, 800),
-        "§ 1 Zweck\n(1) Ein Testsatz.",
-        fontsize=11,
+    pdf_sha256 = write_test_pdf(pdf_path)
+    manifest_path = source_dir / "manifest.json"
+    write_manifest(
+        manifest_path,
+        [
+            with_pdf_sha(
+                good_entry(package, relative_package),
+                pdf_sha256,
+            )
+        ],
     )
-    pdf.save(pdf_path)
-    pdf.close()
 
     output_dir = tmp_path / "output"
     aggregate = batch.run(
@@ -335,6 +496,13 @@ def test_batch_adds_secondary_pdf_page_numbers_when_matched(tmp_path):
     payload = json.loads(raw_path.read_text(encoding="utf-8"))
     document = payload["documents"][0]
     assert document["metadata"]["pdf_pages"] == 1
+    assert document["metadata"]["pdf_alignment_requested"] is True
+    assert (
+        document["metadata"]["pdf_alignment_version"]
+        == batch.EXPECTED_ALIGNMENT_VERSION
+    )
+    assert document["metadata"]["source_pdf_sha256"] == pdf_sha256
+    assert document["metadata"]["source_pdf_manifest_sha256"] == pdf_sha256
     assert document["page_refs"][0]["page_number"] == 1
     assert "path" not in document["page_refs"][0]
     paragraph = next(
@@ -343,3 +511,155 @@ def test_batch_adds_secondary_pdf_page_numbers_when_matched(tmp_path):
         if unit["unit_type"] == "paragraph"
     )
     assert paragraph["page_range"] == {"start": 1, "end": 1}
+
+
+def test_resume_reprocesses_when_pdf_alignment_is_enabled_later(tmp_path):
+    source_dir = tmp_path / "xml-corpus"
+    source_dir.mkdir()
+    relative_package = "documents/batch/source.xml.zip"
+    package = write_package(source_dir, relative_package)
+    pdf_dir = tmp_path / "pdf-corpus"
+    pdf_path = pdf_dir / "B" / "0007_batchg.pdf"
+    pdf_sha256 = write_test_pdf(pdf_path)
+    manifest_path = source_dir / "manifest.json"
+    write_manifest(
+        manifest_path,
+        [
+            with_pdf_sha(
+                good_entry(package, relative_package),
+                pdf_sha256,
+            )
+        ],
+    )
+    output_dir = tmp_path / "output"
+
+    without_alignment = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            pdf_dir=pdf_dir,
+            align_pdf=False,
+            workers=1,
+        )
+    )
+    raw_path = output_dir / without_alignment["entries"][0]["output_path"]
+    first_payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert (
+        first_payload["documents"][0]["metadata"]["pdf_alignment_status"]
+        == "not_requested"
+    )
+
+    resumed = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            pdf_dir=pdf_dir,
+            align_pdf=True,
+            workers=1,
+            resume=True,
+        )
+    )
+    assert resumed["status_counts"] == {"ok": 1}
+    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert payload["documents"][0]["metadata"]["pdf_alignment_status"] == "aligned"
+
+
+def test_resume_reprocesses_when_missing_pdf_appears(tmp_path):
+    source_dir = tmp_path / "xml-corpus"
+    source_dir.mkdir()
+    relative_package = "documents/batch/source.xml.zip"
+    package = write_package(source_dir, relative_package)
+    staged_pdf = tmp_path / "staged.pdf"
+    pdf_sha256 = write_test_pdf(staged_pdf)
+    manifest_path = source_dir / "manifest.json"
+    write_manifest(
+        manifest_path,
+        [
+            with_pdf_sha(
+                good_entry(package, relative_package),
+                pdf_sha256,
+            )
+        ],
+    )
+    pdf_dir = tmp_path / "pdf-corpus"
+    output_dir = tmp_path / "output"
+
+    missing = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            pdf_dir=pdf_dir,
+            workers=1,
+        )
+    )
+    raw_path = output_dir / missing["entries"][0]["output_path"]
+    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert payload["documents"][0]["metadata"]["pdf_alignment_reason"] == "pdf_source_missing"
+
+    pdf_path = pdf_dir / "B" / "0007_batchg.pdf"
+    pdf_path.parent.mkdir(parents=True)
+    shutil.copyfile(staged_pdf, pdf_path)
+    resumed = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            pdf_dir=pdf_dir,
+            workers=1,
+            resume=True,
+        )
+    )
+    assert resumed["status_counts"] == {"ok": 1}
+    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert payload["documents"][0]["metadata"]["source_pdf_sha256"] == pdf_sha256
+
+
+def test_pdf_hash_mismatch_is_nonfatal_but_never_resumable(tmp_path):
+    source_dir = tmp_path / "xml-corpus"
+    source_dir.mkdir()
+    relative_package = "documents/batch/source.xml.zip"
+    package = write_package(source_dir, relative_package)
+    manifest_path = source_dir / "manifest.json"
+    entry = good_entry(package, relative_package)
+    entry["pdf_manifest_matches"][0]["sha256"] = "0" * 64
+    write_manifest(manifest_path, [entry])
+    pdf_dir = tmp_path / "pdf-corpus"
+    write_test_pdf(pdf_dir / "B" / "0007_batchg.pdf")
+    output_dir = tmp_path / "output"
+
+    initial = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            pdf_dir=pdf_dir,
+            workers=1,
+        )
+    )
+    assert initial["status_counts"] == {"ok": 1}
+    raw_path = output_dir / initial["entries"][0]["output_path"]
+    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert payload["documents"][0]["metadata"]["pdf_alignment_status"] == "error"
+    assert any(
+        issue["issue_type"] == "pdf_alignment_failed"
+        for issue in payload["extraction_issues"]
+    )
+
+    resumed = batch.run(
+        batch.BatchConfig(
+            manifest_path=manifest_path,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            pdf_dir=pdf_dir,
+            workers=1,
+            resume=True,
+        )
+    )
+    assert resumed["status_counts"] == {"ok": 1}
+    assert (
+        resumed["entries"][0]["resume_validation"]
+        == "current PDF hash differs from the downloader manifest"
+    )

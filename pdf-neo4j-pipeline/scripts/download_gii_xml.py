@@ -42,7 +42,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree as ET
 from xml.parsers import expat
 
@@ -54,7 +54,11 @@ MANIFEST_CHECKPOINT_EVERY = 100
 DEFAULT_TOC_URL = "https://www.gesetze-im-internet.de/gii-toc.xml"
 USER_AGENT = "gii-xml-corpus-downloader/{} (+validated research corpus)".format(TOOL_VERSION)
 GII_HOSTS = {"gesetze-im-internet.de", "www.gesetze-im-internet.de"}
+GII_ALLOWED_ORIGINS = frozenset({"https://www.gesetze-im-internet.de"})
 RETRYABLE_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+REPLACED_BUILD_RE = re.compile(
+    r"^\.(?P<target>[0-9a-f]{64})-replaced-(?P<nonce>[0-9a-f]{32})$"
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PROJECT_ROOT.parent
@@ -70,8 +74,59 @@ class SourceError(CorpusError):
     """Raised when an input catalog or manifest is malformed."""
 
 
+@dataclass(frozen=True)
+class DownloadAttempt:
+    """Structured outcome for one HTTP attempt within an item download."""
+
+    phase: str
+    url: str
+    attempt: int
+    outcome: str
+    http_status: Optional[int] = None
+    error_type: Optional[str] = None
+    reason: Optional[str] = None
+    failure_kind: Optional[str] = None
+
+    def manifest_dict(self) -> Dict[str, Any]:
+        return {
+            "phase": self.phase,
+            "url": self.url,
+            "attempt": self.attempt,
+            "outcome": self.outcome,
+            "http_status": self.http_status,
+            "error_type": self.error_type,
+            "reason": self.reason,
+            "failure_kind": self.failure_kind,
+        }
+
+
 class DownloadError(CorpusError):
-    """Raised when a remote object cannot be downloaded."""
+    """Raised with structured metadata when a remote object cannot be downloaded."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        url: Optional[str] = None,
+        http_status: Optional[int] = None,
+        http_attempts: Optional[int] = None,
+        attempts: Sequence[DownloadAttempt] = (),
+    ) -> None:
+        super().__init__(message)
+        self.url = url
+        self.http_status = http_status
+        self.http_attempts = http_attempts
+        self.attempts = tuple(attempts)
+
+    def terminal_attempt(self, phase: str) -> Optional[DownloadAttempt]:
+        return next(
+            (
+                attempt
+                for attempt in reversed(self.attempts)
+                if attempt.phase == phase
+            ),
+            None,
+        )
 
 
 class ValidationError(CorpusError):
@@ -212,11 +267,13 @@ def safe_url(url: str) -> str:
 
 
 def normalize_source_url(url: str, base_url: Optional[str] = None) -> str:
-    """Resolve a URL and upgrade only the official GII host from HTTP to HTTPS."""
+    """Resolve and validate an allowlisted Gesetze-im-Internet HTTP(S) URL."""
 
     value = (url or "").strip()
     if base_url:
         value = urljoin(base_url, value)
+    if not value or any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise SourceError("URL is empty or contains control characters: {!r}".format(url))
     try:
         parts = urlsplit(value)
         port = parts.port
@@ -224,19 +281,25 @@ def normalize_source_url(url: str, base_url: Optional[str] = None) -> str:
         raise SourceError("malformed URL {!r}: {}".format(url, exc)) from exc
     if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
         raise SourceError("expected an absolute HTTP(S) URL, got {!r}".format(url))
+    if parts.username is not None or parts.password is not None:
+        raise SourceError("URL credentials are not allowed: {!r}".format(url))
     hostname = (parts.hostname or "").lower()
     scheme = parts.scheme.lower()
     if hostname in GII_HOSTS and scheme == "http":
         scheme = "https"
-    netloc = parts.netloc.lower()
     if hostname in GII_HOSTS:
-        netloc = "www.gesetze-im-internet.de"
-        if port not in {None, 80, 443}:
-            netloc += ":{}".format(port)
-    elif (scheme == "https" and port == 443) or (
-        scheme == "http" and port == 80
-    ):
-        netloc = hostname
+        hostname = "www.gesetze-im-internet.de"
+    host_for_netloc = "[{}]".format(hostname) if ":" in hostname else hostname
+    netloc = host_for_netloc
+    if port is not None:
+        netloc += ":{}".format(port)
+    origin = "{}://{}".format(scheme, netloc)
+    if origin not in GII_ALLOWED_ORIGINS:
+        raise SourceError(
+            "URL origin is not allowlisted for Gesetze-im-Internet: {!r}".format(
+                origin
+            )
+        )
     path = re.sub(r"/+", "/", parts.path or "/")
     return urlunsplit((scheme, netloc, path, parts.query, ""))
 
@@ -276,11 +339,43 @@ def derive_detail_url(xml_url: str) -> str:
     return normalize_source_url(urljoin(normalize_source_url(xml_url), "index.html"))
 
 
+class AllowlistedRedirectHandler(HTTPRedirectHandler):
+    """Reject a redirect target before urllib can issue its next request."""
+
+    def redirect_request(
+        self,
+        request: Request,
+        file_pointer: Any,
+        code: int,
+        message: str,
+        headers: Mapping[str, str],
+        new_url: str,
+    ) -> Optional[Request]:
+        try:
+            validated_url = normalize_source_url(
+                new_url,
+                base_url=request.full_url,
+            )
+        except SourceError as exc:
+            raise SourceError(
+                "refusing redirect from {}: {}".format(request.full_url, exc)
+            ) from exc
+        return super().redirect_request(
+            request,
+            file_pointer,
+            code,
+            message,
+            headers,
+            safe_url(validated_url),
+        )
+
+
 class HTTPClient:
     """Small retrying urllib client used by catalog and corpus downloads."""
 
     def __init__(self, config: HTTPConfig) -> None:
         self.config = config
+        self._opener = build_opener(AllowlistedRedirectHandler())
 
     def _sleep_before_retry(self, attempt: int) -> None:
         delay = self.config.retry_backoff_seconds * (2 ** max(0, attempt - 1))
@@ -288,12 +383,21 @@ class HTTPClient:
             time.sleep(delay)
 
     def fetch_bytes(self, url: str) -> Tuple[bytes, str, int]:
+        requested_url = normalize_source_url(url)
         last_error: Optional[BaseException] = None
+        failed_attempts: List[DownloadAttempt] = []
         total_attempts = self.config.retries + 1
         for attempt in range(1, total_attempts + 1):
             try:
-                request = Request(safe_url(url), headers={"User-Agent": USER_AGENT})
-                with urlopen(request, timeout=self.config.timeout_seconds) as response:
+                request = Request(
+                    safe_url(requested_url),
+                    headers={"User-Agent": USER_AGENT},
+                )
+                with self._opener.open(
+                    request,
+                    timeout=self.config.timeout_seconds,
+                ) as response:
+                    final_url = normalize_source_url(response.geturl())
                     content_length = response.headers.get("Content-Length")
                     expected_length = int(content_length) if content_length else None
                     if expected_length and expected_length > self.config.max_download_bytes:
@@ -319,9 +423,21 @@ class HTTPClient:
                             b"",
                             max(0, expected_length - size),
                         )
-                    return b"".join(chunks), response.geturl(), attempt
+                    return b"".join(chunks), final_url, attempt
             except HTTPError as exc:
                 last_error = exc
+                failed_attempts.append(
+                    DownloadAttempt(
+                        phase="http_get",
+                        url=requested_url,
+                        attempt=attempt,
+                        outcome="error",
+                        http_status=exc.code,
+                        error_type=type(exc).__name__,
+                        reason=str(exc),
+                        failure_kind="http",
+                    )
+                )
                 if exc.code not in RETRYABLE_HTTP_STATUSES or attempt >= total_attempts:
                     break
             except (
@@ -333,21 +449,47 @@ class HTTPClient:
                 ssl.SSLError,
             ) as exc:
                 last_error = exc
+                failed_attempts.append(
+                    DownloadAttempt(
+                        phase="http_get",
+                        url=requested_url,
+                        attempt=attempt,
+                        outcome="error",
+                        error_type=type(exc).__name__,
+                        reason=str(exc),
+                        failure_kind="network",
+                    )
+                )
                 if attempt >= total_attempts:
                     break
             self._sleep_before_retry(attempt)
         raise DownloadError(
-            "GET {} failed after {} attempt(s): {}".format(url, attempt, last_error)
+            "GET {} failed after {} attempt(s): {}".format(url, attempt, last_error),
+            url=requested_url,
+            http_status=(
+                last_error.code if isinstance(last_error, HTTPError) else None
+            ),
+            http_attempts=attempt,
+            attempts=failed_attempts,
         )
 
     def download(self, url: str, destination: Path) -> Dict[str, Any]:
+        requested_url = normalize_source_url(url)
         last_error: Optional[BaseException] = None
+        failed_attempts: List[DownloadAttempt] = []
         total_attempts = self.config.retries + 1
         for attempt in range(1, total_attempts + 1):
             destination.unlink(missing_ok=True)
             try:
-                request = Request(safe_url(url), headers={"User-Agent": USER_AGENT})
-                with urlopen(request, timeout=self.config.timeout_seconds) as response:
+                request = Request(
+                    safe_url(requested_url),
+                    headers={"User-Agent": USER_AGENT},
+                )
+                with self._opener.open(
+                    request,
+                    timeout=self.config.timeout_seconds,
+                ) as response:
+                    final_url = normalize_source_url(response.geturl())
                     content_length = response.headers.get("Content-Length")
                     expected_length = int(content_length) if content_length else None
                     if expected_length and expected_length > self.config.max_download_bytes:
@@ -378,7 +520,7 @@ class HTTPClient:
                         handle.flush()
                         os.fsync(handle.fileno())
                     return {
-                        "url": normalize_source_url(response.geturl()),
+                        "url": final_url,
                         "bytes": size,
                         "sha256": digest.hexdigest(),
                         "http_attempts": attempt,
@@ -386,6 +528,18 @@ class HTTPClient:
             except HTTPError as exc:
                 last_error = exc
                 destination.unlink(missing_ok=True)
+                failed_attempts.append(
+                    DownloadAttempt(
+                        phase="http_get",
+                        url=requested_url,
+                        attempt=attempt,
+                        outcome="error",
+                        http_status=exc.code,
+                        error_type=type(exc).__name__,
+                        reason=str(exc),
+                        failure_kind="http",
+                    )
+                )
                 if exc.code not in RETRYABLE_HTTP_STATUSES or attempt >= total_attempts:
                     break
             except (
@@ -398,6 +552,17 @@ class HTTPClient:
             ) as exc:
                 last_error = exc
                 destination.unlink(missing_ok=True)
+                failed_attempts.append(
+                    DownloadAttempt(
+                        phase="http_get",
+                        url=requested_url,
+                        attempt=attempt,
+                        outcome="error",
+                        error_type=type(exc).__name__,
+                        reason=str(exc),
+                        failure_kind="network",
+                    )
+                )
                 if attempt >= total_attempts:
                     break
             except Exception:
@@ -406,7 +571,13 @@ class HTTPClient:
             self._sleep_before_retry(attempt)
         destination.unlink(missing_ok=True)
         raise DownloadError(
-            "GET {} failed after {} attempt(s): {}".format(url, attempt, last_error)
+            "GET {} failed after {} attempt(s): {}".format(url, attempt, last_error),
+            url=requested_url,
+            http_status=(
+                last_error.code if isinstance(last_error, HTTPError) else None
+            ),
+            http_attempts=attempt,
+            attempts=failed_attempts,
         )
 
 
@@ -537,6 +708,7 @@ def reconcile_sources(
     key_counts: Counter[str] = Counter()
     items: List[CorpusItem] = []
     matched = 0
+    duplicate_pdf_aliases = 0
     for toc_entry in toc_entries:
         key = law_key_from_url(toc_entry.xml_url)
         pdf_matches: List[Mapping[str, Any]] = []
@@ -548,6 +720,7 @@ def reconcile_sources(
         if pdf_matches:
             pdf_match = pdf_matches[0]
             matched += 1
+            duplicate_pdf_aliases += len(pdf_matches) - 1
         key_counts[key] += 1
         detail_url = (
             normalize_source_url(str(pdf_match.get("detail_url")))
@@ -607,6 +780,7 @@ def reconcile_sources(
                     if match_position != position:
                         pdf_matches.append(match)
                 pdf_only += 1
+                duplicate_pdf_aliases += len(pdf_matches) - 1
             except SourceError:
                 invalid_pdf += 1
                 key = "invalid-pdf-entry:{}".format(
@@ -646,6 +820,7 @@ def reconcile_sources(
         "toc_entries": len(toc_entries),
         "pdf_manifest_entries": len(pdf_entries),
         "matched": matched,
+        "duplicate_pdf_aliases": duplicate_pdf_aliases,
         "toc_only": len(toc_entries) - matched,
         "pdf_manifest_only": pdf_only,
         "invalid_pdf_manifest_entries": invalid_pdf,
@@ -883,16 +1058,26 @@ def validate_existing_record(
         if record.get("status") not in {"ok", "ok_existing"}:
             return False, "prior status is not successful"
         archive_rel = str(record.get("relative_archive_path") or "")
-        archive_hash = str(record.get("sha256") or record.get("archive_sha256") or "")
-        if not archive_rel or not archive_hash:
+        archive_hash_fields = [
+            field for field in ("sha256", "archive_sha256") if field in record
+        ]
+        if not archive_rel or not archive_hash_fields:
             return False, "prior record lacks archive path or hash"
         archive_path = _safe_output_path(output_dir, archive_rel)
+        archive_parent_rel = PurePosixPath(archive_rel).parent
+        if "relative_build_dir" in record:
+            build_rel = str(record.get("relative_build_dir") or "")
+            _safe_output_path(output_dir, build_rel)
+            if PurePosixPath(build_rel) != archive_parent_rel:
+                return False, "archive path differs from recorded build directory"
         if not archive_path.is_file():
             return False, "archive is missing"
         if archive_path.stat().st_size != int(record.get("archive_bytes") or -1):
             return False, "archive size changed"
-        if file_sha256(archive_path) != archive_hash:
-            return False, "archive hash changed"
+        actual_archive_hash = file_sha256(archive_path)
+        for field in archive_hash_fields:
+            if actual_archive_hash != str(record.get(field) or ""):
+                return False, "archive hash changed ({})".format(field)
         archive_xml_sizes: Dict[str, int] = {}
         try:
             with zipfile.ZipFile(str(archive_path), "r") as archive:
@@ -938,24 +1123,82 @@ def validate_existing_record(
             return False, "recorded XML member set differs from archive"
         if int(record.get("xml_file_count") or -1) != len(xml_files):
             return False, "recorded XML member count is inconsistent"
+        verified_xml: Dict[str, Dict[str, Any]] = {}
         for xml_record in xml_files:
             if not isinstance(xml_record, dict):
                 return False, "malformed XML metadata"
+            member_name = str(xml_record.get("member_name") or "")
+            member_path = _safe_zip_member(member_name)
+            xml_rel = str(xml_record.get("relative_file_path") or "")
             xml_path = _safe_output_path(
                 output_dir,
-                str(xml_record.get("relative_file_path") or ""),
+                xml_rel,
             )
+            expected_xml_rel = archive_parent_rel / "xml" / member_path
+            if PurePosixPath(xml_rel) != expected_xml_rel:
+                return False, "extracted XML path is inconsistent with archive member"
             if not xml_path.is_file():
                 return False, "extracted XML is missing"
-            if xml_path.stat().st_size != int(xml_record.get("bytes") or -1):
+            recorded_xml_bytes = int(xml_record.get("bytes") or -1)
+            if xml_path.stat().st_size != recorded_xml_bytes:
                 return False, "extracted XML size changed"
-            if archive_xml_sizes[str(xml_record["member_name"])] != int(
-                xml_record.get("bytes") or -1
-            ):
+            if archive_xml_sizes[member_name] != recorded_xml_bytes:
                 return False, "recorded XML size differs from archive"
-            if file_sha256(xml_path) != str(xml_record.get("sha256") or ""):
+            actual_xml_hash = file_sha256(xml_path)
+            if actual_xml_hash != str(xml_record.get("sha256") or ""):
                 return False, "extracted XML hash changed"
-            validate_xml_file(xml_path)
+            actual_xml_metadata = validate_xml_file(xml_path)
+            for field in (
+                "root_element",
+                "root_attributes",
+                "builddate",
+                "document_number",
+            ):
+                if field in xml_record and xml_record.get(field) != actual_xml_metadata[field]:
+                    return False, "extracted XML metadata changed ({})".format(field)
+            verified_xml[xml_rel] = {
+                "bytes": recorded_xml_bytes,
+                "sha256": actual_xml_hash,
+                "member_name": member_name,
+                "metadata": actual_xml_metadata,
+            }
+        if "xml_uncompressed_bytes" in record and int(
+            record.get("xml_uncompressed_bytes") or -1
+        ) != sum(int(row["bytes"]) for row in verified_xml.values()):
+            return False, "recorded XML byte total is inconsistent"
+
+        primary_alias_fields = (
+            "xml_bytes",
+            "xml_sha256",
+            "xml_document_number",
+            "xml_build_date",
+        )
+        if "relative_file_path" in record:
+            primary_rel = str(record.get("relative_file_path") or "")
+            _safe_output_path(output_dir, primary_rel)
+            if primary_rel not in verified_xml:
+                return False, "top-level XML path is not in recorded XML files"
+            expected_primary_rel = max(
+                verified_xml,
+                key=lambda relative: (
+                    int(verified_xml[relative]["bytes"]),
+                    str(verified_xml[relative]["member_name"]),
+                ),
+            )
+            if primary_rel != expected_primary_rel:
+                return False, "top-level XML path does not identify the primary XML"
+            primary = verified_xml[primary_rel]
+            alias_values = {
+                "xml_bytes": primary["bytes"],
+                "xml_sha256": primary["sha256"],
+                "xml_document_number": primary["metadata"]["document_number"],
+                "xml_build_date": primary["metadata"]["builddate"],
+            }
+            for field in primary_alias_fields:
+                if field in record and record.get(field) != alias_values[field]:
+                    return False, "top-level XML metadata changed ({})".format(field)
+        elif any(field in record for field in primary_alias_fields):
+            return False, "top-level XML metadata lacks its relative path"
         return True, None
     except (OSError, ValueError, ValidationError) as exc:
         return False, str(exc)
@@ -1017,10 +1260,72 @@ def _remove_owned_path(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def _recover_interrupted_target(target_dir: Path) -> None:
+    """Resolve downloader-owned replacement backups for one content hash."""
+
+    if not re.fullmatch(r"[0-9a-f]{64}", target_dir.name):
+        return
+    parent = target_dir.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise ValidationError(
+            "refusing publication recovery below non-directory path: {}".format(parent)
+        )
+    backups = []
+    for child in parent.iterdir():
+        match = REPLACED_BUILD_RE.fullmatch(child.name)
+        if match and match.group("target") == target_dir.name:
+            if child.is_symlink() or not child.is_dir():
+                raise ValidationError(
+                    "refusing malformed publication backup: {}".format(child)
+                )
+            backups.append(child)
+    if not backups:
+        return
+    backups.sort(key=lambda path: path.name)
+    if target_dir.is_symlink() or (
+        target_dir.exists() and not target_dir.is_dir()
+    ):
+        raise ValidationError(
+            "refusing publication recovery over non-directory target: {}".format(
+                target_dir
+            )
+        )
+    if not target_dir.exists():
+        restored = backups.pop(0)
+        os.replace(str(restored), str(target_dir))
+    for stale_backup in backups:
+        _remove_owned_path(stale_backup)
+
+
+def recover_interrupted_publications(output_dir: Path) -> None:
+    """Recover only exact downloader replacement directories at their known depth."""
+
+    documents_dir = output_dir / "documents"
+    if not documents_dir.exists():
+        return
+    if documents_dir.is_symlink() or not documents_dir.is_dir():
+        raise ValidationError(
+            "refusing publication recovery below non-directory path: {}".format(
+                documents_dir
+            )
+        )
+    targets = set()
+    for item_dir in documents_dir.iterdir():
+        if item_dir.is_symlink() or not item_dir.is_dir():
+            continue
+        for child in item_dir.iterdir():
+            match = REPLACED_BUILD_RE.fullmatch(child.name)
+            if match:
+                targets.add(item_dir / match.group("target"))
+    for target_dir in sorted(targets, key=lambda path: path.as_posix()):
+        _recover_interrupted_target(target_dir)
+
+
 def _install_build(stage_dir: Path, target_dir: Path) -> None:
     """Publish one validated content-addressed build with rollback on repair."""
 
     target_dir.parent.mkdir(parents=True, exist_ok=True)
+    _recover_interrupted_target(target_dir)
     if not target_dir.exists():
         os.replace(str(stage_dir), str(target_dir))
         return
@@ -1163,6 +1468,48 @@ def prior_source_matches_item(
     return True, None
 
 
+def _item_attempts_for_error(
+    phase: str,
+    url: str,
+    exc: BaseException,
+) -> List[DownloadAttempt]:
+    if isinstance(exc, DownloadError) and exc.attempts:
+        return [
+            DownloadAttempt(
+                phase=phase,
+                url=attempt.url,
+                attempt=attempt.attempt,
+                outcome=attempt.outcome,
+                http_status=attempt.http_status,
+                error_type=attempt.error_type,
+                reason=attempt.reason,
+                failure_kind=attempt.failure_kind,
+            )
+            for attempt in exc.attempts
+        ]
+    return [
+        DownloadAttempt(
+            phase=phase,
+            url=url,
+            attempt=1,
+            outcome="error",
+            error_type=type(exc).__name__,
+            reason=str(exc),
+            failure_kind=(
+                "validation"
+                if isinstance(exc, ValidationError)
+                else "source"
+                if isinstance(exc, SourceError)
+                else "download"
+                if isinstance(exc, DownloadError)
+                else "io"
+                if isinstance(exc, OSError)
+                else "other"
+            ),
+        )
+    ]
+
+
 def download_item(
     item: CorpusItem,
     output_dir: Path,
@@ -1172,6 +1519,7 @@ def download_item(
 ) -> Dict[str, Any]:
     attempted: List[str] = []
     failures: List[str] = []
+    attempt_metadata: List[DownloadAttempt] = []
     candidates = _candidate_urls(item)
     for candidate in candidates:
         attempted.append(candidate)
@@ -1189,6 +1537,9 @@ def download_item(
             return result
         except (CorpusError, OSError) as exc:
             failures.append("{}: {}".format(candidate, exc))
+            attempt_metadata.extend(
+                _item_attempts_for_error("direct_xml", candidate, exc)
+            )
 
     if item.detail_url:
         discovery_metadata: Optional[Dict[str, Any]] = None
@@ -1203,8 +1554,19 @@ def download_item(
                 "http_attempts": discovery_attempts,
             }
             discovered = discover_xml_urls(final_detail_url, html)
+            attempt_metadata.append(
+                DownloadAttempt(
+                    phase="detail_page",
+                    url=final_detail_url,
+                    attempt=discovery_attempts,
+                    outcome="success",
+                )
+            )
         except (CorpusError, OSError) as exc:
             failures.append("{}: detail-page discovery failed: {}".format(item.detail_url, exc))
+            attempt_metadata.extend(
+                _item_attempts_for_error("detail_page", item.detail_url, exc)
+            )
             discovered = []
         for candidate in discovered:
             if candidate in attempted:
@@ -1225,10 +1587,16 @@ def download_item(
                 return result
             except (CorpusError, OSError) as exc:
                 failures.append("{}: {}".format(candidate, exc))
+                attempt_metadata.extend(
+                    _item_attempts_for_error("discovered_xml", candidate, exc)
+                )
 
     if not attempted:
         raise SourceError("entry has neither a valid XML URL nor a detail URL")
-    raise DownloadError("; ".join(failures) or "no usable XML ZIP URL")
+    raise DownloadError(
+        "; ".join(failures) or "no usable XML ZIP URL",
+        attempts=attempt_metadata,
+    )
 
 
 def base_record(item: CorpusItem) -> Dict[str, Any]:
@@ -1254,6 +1622,29 @@ def base_record(item: CorpusItem) -> Dict[str, Any]:
         "status": "not_selected",
         "error": None,
     }
+
+
+def _is_conclusive_pdf_only_404(
+    item: CorpusItem,
+    exc: DownloadError,
+) -> bool:
+    if item.reconciliation_status != "pdf_manifest_only":
+        return False
+    if any(
+        attempt.outcome == "error"
+        and attempt.failure_kind not in {"http", "network"}
+        for attempt in exc.attempts
+    ):
+        return False
+    for phase in ("direct_xml", "detail_page"):
+        terminal = exc.terminal_attempt(phase)
+        if (
+            terminal is None
+            or terminal.outcome != "error"
+            or terminal.http_status != 404
+        ):
+            return False
+    return True
 
 
 def process_item(
@@ -1297,6 +1688,17 @@ def process_item(
         record.update(result)
         record["status"] = "ok"
         record["error"] = None
+    except DownloadError as exc:
+        record["download_attempts"] = [
+            attempt.manifest_dict() for attempt in exc.attempts
+        ]
+        if _is_conclusive_pdf_only_404(item, exc):
+            record["status"] = "xml_unavailable"
+            record["error"] = None
+            record["xml_unavailable_reason"] = str(exc)
+        else:
+            record["status"] = "error"
+            record["error"] = "{}: {}".format(type(exc).__name__, exc)
     except Exception as exc:  # one bad law must not abort a full-corpus run
         record["status"] = "error"
         record["error"] = "{}: {}".format(type(exc).__name__, exc)
@@ -1406,7 +1808,7 @@ def read_toc_source(
             "entry_count": len(entries),
             "http_attempts": attempts,
         }
-    else:
+    elif not source_parts.scheme:
         path = Path(source)
         try:
             raw = path.read_bytes()
@@ -1420,6 +1822,12 @@ def read_toc_source(
             "entry_count": len(entries),
             "http_attempts": 0,
         }
+    else:
+        raise SourceError(
+            "unsupported gii-toc source scheme {!r}; use HTTP(S) or a local path".format(
+                source_parts.scheme
+            )
+        )
     return entries, metadata
 
 
@@ -1494,6 +1902,7 @@ def _run_locked(config: RunConfig) -> Dict[str, Any]:
         )
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    recover_interrupted_publications(config.output_dir)
     cleanup_staging(config.output_dir)
     client = HTTPClient(
         HTTPConfig(

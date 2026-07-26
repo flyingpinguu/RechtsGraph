@@ -15,9 +15,9 @@ import os
 import re
 import tempfile
 import unicodedata
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from pypdf import PdfReader
 
@@ -30,6 +30,11 @@ except ImportError:  # pragma: no cover - optional local dependency
 TOKEN_RE = re.compile(r"[a-z0-9§]+", re.IGNORECASE)
 SPACE_RE = re.compile(r"\s+")
 SOFT_LINE_BREAK_RE = re.compile(r"(?<=\w)-\s*\n\s*(?=\w)")
+ALIGNMENT_VERSION = "2.0.0"
+TOP_K_CANDIDATES = 8
+MAX_CANDIDATE_POOL = 48
+MAX_PROFILE_TOKENS = 56
+JUMP_PENALTY_PER_PAGE = 0.0008
 STOPWORDS = {
     "aber",
     "als",
@@ -114,17 +119,24 @@ def _contains_phrase(page_text: str, phrase: str) -> bool:
 
 
 def _source_order(item: Dict[str, Any], fallback: int) -> Tuple[Any, ...]:
+    def sortable(value: Any) -> Tuple[int, Any]:
+        if isinstance(value, bool):
+            return (0, int(value))
+        if isinstance(value, (int, float)):
+            return (0, float(value))
+        return (1, str(value))
+
     order = item.get("source_order")
     if isinstance(order, list):
-        return tuple(order)
+        return tuple(sortable(value) for value in order)
     if isinstance(order, tuple):
-        return order
+        return tuple(sortable(value) for value in order)
     if isinstance(order, (int, float, str)):
-        return (order,)
+        return (sortable(order),)
     sequence = item.get("sequence")
     if isinstance(sequence, (int, float, str)):
-        return (sequence,)
-    return (fallback,)
+        return (sortable(sequence),)
+    return (sortable(fallback),)
 
 
 def _item_identifier(item: Dict[str, Any]) -> str:
@@ -144,28 +156,82 @@ def _anchor_profile(item: Dict[str, Any], tail: bool = False) -> Dict[str, Any]:
     label = str(item.get("label") or "")
     title = str(item.get("title") or "")
     content = _content_text(item)
-    selected = content[-500:] if tail else content[:500]
-    anchor = " ".join(part for part in (label, title, selected) if part)
-    tokens = alignment_tokens(anchor)
-    if len(tokens) > 60:
-        tokens = tokens[-60:] if tail else tokens[:60]
-    phrase_tokens = tokens[-10:] if tail else tokens[:10]
+    content_tokens = alignment_tokens(content)
+    selected_tokens = (
+        content_tokens[-MAX_PROFILE_TOKENS:]
+        if tail
+        else content_tokens[:MAX_PROFILE_TOKENS]
+    )
+    context_tokens = alignment_tokens(" ".join((label, title)))
+    tokens = list(selected_tokens)
+    for token in context_tokens:
+        if token not in tokens:
+            tokens.append(token)
+    phrase_tokens = (
+        selected_tokens[-8:] if tail else selected_tokens[:8]
+    )
+    ngrams = {
+        tuple(selected_tokens[index : index + 3])
+        for index in range(max(0, len(selected_tokens) - 2))
+    }
+    normalized_content = normalize_alignment_text(content)
+    meaningful_content = (
+        len(selected_tokens) >= 4
+        and len(normalized_content) >= 24
+    ) or (
+        len(selected_tokens) >= 3
+        and len(normalized_content) >= 24
+        and max((len(token) for token in selected_tokens), default=0) >= 10
+    ) or (
+        len(selected_tokens) >= 1
+        and len(normalized_content) >= 8
+        and bool(context_tokens)
+    )
     return {
         "label": label,
         "title": title,
-        "anchor": normalize_alignment_text(anchor),
+        "anchor": normalize_alignment_text(
+            " ".join(part for part in (label, title, content) if part)
+        ),
+        "content": normalized_content,
+        "content_tokens": selected_tokens,
         "tokens": tokens,
         "phrase": " ".join(phrase_tokens),
-        "has_content": bool(normalize_alignment_text(content)),
+        "ngrams": ngrams,
+        "has_content": bool(normalized_content),
+        "meaningful_content": meaningful_content,
     }
 
 
-def _page_features(page_objects: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _toc_penalty(normalized: str, page_index: int) -> float:
+    explicit_toc = any(
+        marker in normalized
+        for marker in (
+            "inhaltsübersicht",
+            "inhaltsverzeichnis",
+            "übersicht über den inhalt",
+        )
+    )
+    provision_references = len(
+        re.findall(r"(?:^|\s)(?:§{1,2}|art(?:ikel)?\.?)\s*\d", normalized)
+    )
+    dotted_leaders = len(re.findall(r"\.{3,}\s*\d+", normalized))
+    if explicit_toc:
+        return 0.24
+    if page_index < 12 and (provision_references >= 8 or dotted_leaders >= 4):
+        return 0.14
+    return 0.0
+
+
+def _page_features(page_objects: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     normalized_pages = [
         normalize_alignment_text(str(page.get("text") or ""))
         for page in page_objects
     ]
-    page_token_sets = [set(alignment_tokens(text)) for text in normalized_pages]
+    page_token_sequences = [
+        alignment_tokens(text) for text in normalized_pages
+    ]
+    page_token_sets = [set(tokens) for tokens in page_token_sequences]
     document_frequency: Counter[str] = Counter()
     for tokens in page_token_sets:
         document_frequency.update(tokens)
@@ -174,26 +240,49 @@ def _page_features(page_objects: Sequence[Dict[str, Any]]) -> List[Dict[str, Any
         token: math.log((page_count + 1) / (count + 1)) + 1.0
         for token, count in document_frequency.items()
     }
-    return [
-        {
-            "page": page,
-            "normalized": normalized,
-            "tokens": tokens,
-            "idf": idf,
-        }
-        for page, normalized, tokens in zip(
+    features: List[Dict[str, Any]] = []
+    token_postings: Dict[str, List[int]] = defaultdict(list)
+    ngram_postings: Dict[Tuple[str, str, str], List[int]] = defaultdict(list)
+    for index, (page, normalized, token_sequence, tokens) in enumerate(
+        zip(
             page_objects,
             normalized_pages,
+            page_token_sequences,
             page_token_sets,
         )
-    ]
+    ):
+        ngrams = {
+            tuple(token_sequence[offset : offset + 3])
+            for offset in range(max(0, len(token_sequence) - 2))
+        }
+        feature = {
+            "page": page,
+            "normalized": normalized,
+            "token_sequence": token_sequence,
+            "token_text": " ".join(token_sequence),
+            "tokens": tokens,
+            "ngrams": ngrams,
+            "idf": idf,
+            "toc_penalty": _toc_penalty(normalized, index),
+        }
+        features.append(feature)
+        for token in tokens:
+            token_postings[token].append(index)
+        for ngram in ngrams:
+            ngram_postings[ngram].append(index)
+    return {
+        "pages": features,
+        "idf": idf,
+        "token_postings": token_postings,
+        "ngram_postings": ngram_postings,
+    }
 
 
 def _score_profile(
     profile: Dict[str, Any],
     page: Dict[str, Any],
 ) -> Tuple[float, str]:
-    tokens = list(dict.fromkeys(profile["tokens"]))
+    tokens = list(dict.fromkeys(profile["content_tokens"]))
     page_tokens = page["tokens"]
     idf = page["idf"]
     total_weight = sum(idf.get(token, 1.0) for token in tokens)
@@ -205,18 +294,26 @@ def _score_profile(
     title_match = _contains_phrase(page["normalized"], profile["title"])
     phrase_match = (
         len(profile["phrase"]) >= 16
-        and profile["phrase"] in page["normalized"]
+        and profile["phrase"] in page["token_text"]
     )
+    profile_ngrams = profile["ngrams"]
+    matched_ngrams = profile_ngrams.intersection(page["ngrams"])
+    ngram_coverage = (
+        len(matched_ngrams) / len(profile_ngrams)
+        if profile_ngrams
+        else 0.0
+    )
+    ngram_strength = min(1.0, len(matched_ngrams) / 5.0)
 
-    if profile["has_content"] and tokens:
-        score = 0.72 * coverage
-        score += 0.12 if label_match else 0.0
-        score += 0.08 if title_match else 0.0
-        score += 0.18 if phrase_match else 0.0
-    else:
-        score = 0.55 * coverage
-        score += 0.30 if label_match else 0.0
-        score += 0.25 if title_match else 0.0
+    score = 0.52 * coverage
+    score += 0.18 * ngram_coverage
+    score += 0.12 * ngram_strength
+    score += 0.15 if phrase_match else 0.0
+    score += 0.025 if label_match else 0.0
+    score += 0.015 if title_match else 0.0
+    score -= page.get("toc_penalty", 0.0) * (
+        0.35 if phrase_match and len(matched_ngrams) >= 3 else 1.0
+    )
     method_parts = []
     if phrase_match:
         method_parts.append("phrase")
@@ -224,47 +321,174 @@ def _score_profile(
         method_parts.append("label")
     if title_match:
         method_parts.append("title")
+    if matched_ngrams:
+        method_parts.append("ordered_ngrams")
     if coverage:
         method_parts.append("idf_tokens")
-    return min(score, 1.0), "+".join(method_parts) or "none"
+    if page.get("toc_penalty", 0.0):
+        method_parts.append("toc_penalized")
+    return max(0.0, min(score, 1.0)), "+".join(method_parts) or "none"
 
 
 def _minimum_score(profile: Dict[str, Any]) -> float:
-    token_count = len(set(profile["tokens"]))
-    if profile["has_content"] and token_count >= 8:
-        return 0.28
-    if profile["has_content"] and token_count:
-        return 0.34
-    return 0.48
+    token_count = len(set(profile["content_tokens"]))
+    if token_count >= 20:
+        return 0.43
+    if token_count >= 8:
+        return 0.49
+    if token_count <= 2:
+        return 0.50
+    return 0.56
 
 
-def _best_page(
-    item: Dict[str, Any],
-    pages: Sequence[Dict[str, Any]],
-    start_index: int,
+def _candidate_page_indices(
+    profile: Dict[str, Any],
+    page_index: Dict[str, Any],
+    start_index: int = 0,
     end_index: Optional[int] = None,
-    tail: bool = False,
-) -> Optional[Dict[str, Any]]:
-    profile = _anchor_profile(item, tail=tail)
-    if not profile["tokens"] and not profile["label"] and not profile["title"]:
-        return None
-    upper = len(pages) - 1 if end_index is None else min(end_index, len(pages) - 1)
-    lower = max(0, min(start_index, upper)) if pages else 0
-    best: Optional[Dict[str, Any]] = None
-    for index in range(lower, upper + 1):
+) -> List[int]:
+    pages = page_index["pages"]
+    if not pages:
+        return []
+    lower = max(0, start_index)
+    upper = len(pages) - 1 if end_index is None else min(
+        end_index,
+        len(pages) - 1,
+    )
+    if lower > upper:
+        return []
+
+    votes: Counter[int] = Counter()
+    idf = page_index["idf"]
+    unique_tokens = list(dict.fromkeys(profile["content_tokens"]))
+    rare_tokens = sorted(
+        unique_tokens,
+        key=lambda token: (-idf.get(token, 1.0), token),
+    )[:12]
+    for token in rare_tokens:
+        weight = idf.get(token, 1.0)
+        for index in page_index["token_postings"].get(token, ()):
+            if lower <= index <= upper:
+                votes[index] += weight
+    for ngram in profile["ngrams"]:
+        ngram_weight = 3.0 + sum(idf.get(token, 1.0) for token in ngram) / 3.0
+        for index in page_index["ngram_postings"].get(ngram, ()):
+            if lower <= index <= upper:
+                votes[index] += ngram_weight
+    ranked = sorted(votes, key=lambda index: (-votes[index], index))
+    return ranked[:MAX_CANDIDATE_POOL]
+
+
+def _top_candidates(
+    profile: Dict[str, Any],
+    page_index: Dict[str, Any],
+    start_index: int = 0,
+    end_index: Optional[int] = None,
+    limit: int = TOP_K_CANDIDATES,
+) -> List[Dict[str, Any]]:
+    if not profile["meaningful_content"]:
+        return []
+    pages = page_index["pages"]
+    candidates: List[Dict[str, Any]] = []
+    for index in _candidate_page_indices(
+        profile,
+        page_index,
+        start_index=start_index,
+        end_index=end_index,
+    ):
         score, method = _score_profile(profile, pages[index])
-        candidate = {
+        candidates.append(
+            {
             "page_index": index,
             "page_number": index + 1,
             "score": score,
             "method": method,
             "anchor_preview": profile["anchor"][:160],
+            }
+        )
+    candidates.sort(
+        key=lambda candidate: (-candidate["score"], candidate["page_index"])
+    )
+    if not candidates:
+        return []
+    threshold = _minimum_score(profile)
+    top_score = candidates[0]["score"]
+    accepted = [
+        candidate
+        for candidate in candidates
+        if candidate["score"] >= threshold
+    ]
+    if not accepted:
+        return []
+    second_score = accepted[1]["score"] if len(accepted) > 1 else None
+    ambiguous = (
+        second_score is not None
+        and top_score - second_score < 0.045
+    )
+    strong_ordered_evidence = (
+        "phrase" in accepted[0]["method"]
+        and "ordered_ngrams" in accepted[0]["method"]
+    )
+    if (
+        ambiguous
+        and not strong_ordered_evidence
+        and top_score < threshold + 0.07
+    ):
+        return []
+    for candidate in accepted:
+        candidate["minimum_score"] = threshold
+        candidate["ambiguous"] = ambiguous
+    return accepted[:limit]
+
+
+def _best_page(
+    item: Dict[str, Any],
+    pages: Sequence[Dict[str, Any]] | Dict[str, Any],
+    start_index: int,
+    end_index: Optional[int] = None,
+    tail: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Compatibility helper returning a conservative best candidate."""
+    page_index = (
+        pages
+        if isinstance(pages, dict)
+        else {
+            "pages": list(pages),
+            "idf": pages[0]["idf"] if pages else {},
+            "token_postings": {
+                token: [
+                    index
+                    for index, page in enumerate(pages)
+                    if token in page["tokens"]
+                ]
+                for token in {
+                    token
+                    for page in pages
+                    for token in page["tokens"]
+                }
+            },
+            "ngram_postings": {
+                ngram: [
+                    index
+                    for index, page in enumerate(pages)
+                    if ngram in page.get("ngrams", set())
+                ]
+                for ngram in {
+                    ngram
+                    for page in pages
+                    for ngram in page.get("ngrams", set())
+                }
+            },
         }
-        if best is None or score > best["score"] + 1e-9:
-            best = candidate
-    if best is None or best["score"] < _minimum_score(profile):
-        return None
-    return best
+    )
+    candidates = _top_candidates(
+        _anchor_profile(item, tail=tail),
+        page_index,
+        start_index=start_index,
+        end_index=end_index,
+        limit=1,
+    )
+    return candidates[0] if candidates else None
 
 
 def _set_alignment(
@@ -275,10 +499,12 @@ def _set_alignment(
     method: str,
     confidence: float,
     anchor_preview: str = "",
+    evidence: str = "direct",
 ) -> None:
     item["page_range"] = {"start": start, "end": max(start, end)}
     item["pdf_alignment"] = {
         "method": method,
+        "evidence": evidence,
         "confidence": round(float(confidence), 4),
         "anchor_preview": anchor_preview,
     }
@@ -286,86 +512,300 @@ def _set_alignment(
         item["page_id"] = page_objects[start - 1]["page_id"]
 
 
-def _align_items(
-    items: Sequence[Dict[str, Any]],
-    pages: Sequence[Dict[str, Any]],
-    page_objects: Sequence[Dict[str, Any]],
-    bounds_by_parent: Optional[Dict[str, Tuple[int, int]]] = None,
-) -> Tuple[int, List[str]]:
-    ordered = sorted(
-        enumerate(items),
-        key=lambda pair: _source_order(pair[1], pair[0]),
+def _entry_sort_key(entry: Dict[str, Any]) -> Tuple[Any, ...]:
+    return (
+        _source_order(entry["item"], entry["fallback"]),
+        0 if entry["kind"] == "unit" else 1,
+        entry["fallback"],
+        entry["identifier"],
     )
-    starts: Dict[str, Dict[str, Any]] = {}
-    unmatched: List[str] = []
-    previous_page_index = 0
 
-    for _fallback, item in ordered:
-        identifier = _item_identifier(item)
-        lower = previous_page_index
-        upper: Optional[int] = None
-        if bounds_by_parent is not None:
-            parent = str(item.get("unit_id") or "")
-            bounds = bounds_by_parent.get(parent)
-            if bounds:
-                lower = max(0, bounds[0] - 1)
-                upper = bounds[1] - 1
-        match = _best_page(item, pages, lower, upper)
-        if match is None:
-            unmatched.append(identifier)
+
+def _direct_alignment_entries(
+    document: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    units = document.get("structural_units") or []
+    chunks = document.get("chunks") or []
+    units_by_id = {
+        str(unit.get("unit_id")): unit
+        for unit in units
+        if unit.get("unit_id")
+    }
+    entries: List[Dict[str, Any]] = []
+    alignable_chunks_by_unit: Dict[str, int] = Counter()
+    profiles_by_identifier: Dict[str, Dict[str, Any]] = {}
+
+    for fallback, chunk in enumerate(chunks):
+        identifier = str(chunk.get("chunk_id") or "")
+        parent = str(chunk.get("unit_id") or "")
+        profile = _anchor_profile(chunk)
+        if (
+            not identifier
+            or parent not in units_by_id
+            or str(chunk.get("chunk_type") or "") == "source_asset"
+            or not profile["meaningful_content"]
+        ):
             continue
-        starts[identifier] = match
-        if bounds_by_parent is None:
-            previous_page_index = max(previous_page_index, match["page_index"])
+        alignable_chunks_by_unit[parent] += 1
+        profiles_by_identifier[identifier] = profile
+        entries.append(
+            {
+                "kind": "chunk",
+                "item": chunk,
+                "identifier": identifier,
+                "profile": profile,
+                "fallback": fallback,
+            }
+        )
 
-    matched_order = [
-        (item, starts[_item_identifier(item)])
-        for _fallback, item in ordered
-        if _item_identifier(item) in starts
+    unit_fallback_offset = len(chunks)
+    for fallback, unit in enumerate(units):
+        identifier = str(unit.get("unit_id") or "")
+        profile = _anchor_profile(unit)
+        if (
+            not identifier
+            or alignable_chunks_by_unit.get(identifier)
+            or not profile["meaningful_content"]
+        ):
+            continue
+        profiles_by_identifier[identifier] = profile
+        entries.append(
+            {
+                "kind": "unit",
+                "item": unit,
+                "identifier": identifier,
+                "profile": profile,
+                "fallback": unit_fallback_offset + fallback,
+            }
+        )
+    entries.sort(key=_entry_sort_key)
+    return entries, profiles_by_identifier
+
+
+def _better_node(
+    left: Optional[int],
+    right: Optional[int],
+    nodes: Sequence[Dict[str, Any]],
+    adjusted: bool = False,
+) -> Optional[int]:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    score_key = "adjusted_score" if adjusted else "path_score"
+    left_node = nodes[left]
+    right_node = nodes[right]
+    difference = left_node[score_key] - right_node[score_key]
+    if abs(difference) > 1e-12:
+        return left if difference > 0 else right
+    if left_node["match_count"] != right_node["match_count"]:
+        return left if left_node["match_count"] > right_node["match_count"] else right
+    if left_node["page_index"] != right_node["page_index"]:
+        return left if left_node["page_index"] < right_node["page_index"] else right
+    return left if left < right else right
+
+
+def _monotone_matches(
+    entries: Sequence[Dict[str, Any]],
+    page_index: Dict[str, Any],
+) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+    """Select a monotone subset of top-K candidates with a sparse DP."""
+    page_count = len(page_index["pages"])
+    if not entries or not page_count:
+        return {}, [entry["identifier"] for entry in entries]
+    tree: List[Optional[int]] = [None] * (page_count + 1)
+    nodes: List[Dict[str, Any]] = []
+
+    def query(page: int) -> Optional[int]:
+        position = page + 1
+        best: Optional[int] = None
+        while position > 0:
+            best = _better_node(best, tree[position], nodes, adjusted=True)
+            position -= position & -position
+        return best
+
+    def update(page: int, node_id: int) -> None:
+        position = page + 1
+        while position <= page_count:
+            tree[position] = _better_node(
+                tree[position],
+                node_id,
+                nodes,
+                adjusted=True,
+            )
+            position += position & -position
+
+    for item_index, entry in enumerate(entries):
+        candidates = _top_candidates(entry["profile"], page_index)
+        pending: List[int] = []
+        for rank, candidate in enumerate(candidates):
+            page = candidate["page_index"]
+            predecessor = query(page)
+            transition_score = 0.0
+            match_count = 1
+            if predecessor is not None:
+                previous = nodes[predecessor]
+                transition_score = previous["path_score"] - (
+                    JUMP_PENALTY_PER_PAGE
+                    * max(0, page - previous["page_index"])
+                )
+                match_count = previous["match_count"] + 1
+            ambiguity_penalty = 0.055 if candidate["ambiguous"] else 0.0
+            utility = (
+                0.30
+                + candidate["score"]
+                - candidate["minimum_score"]
+                - ambiguity_penalty
+            )
+            node = {
+                "item_index": item_index,
+                "identifier": entry["identifier"],
+                "page_index": page,
+                "candidate": candidate,
+                "path_score": transition_score + utility,
+                "match_count": match_count,
+                "predecessor": predecessor,
+                "rank": rank,
+            }
+            node["adjusted_score"] = (
+                node["path_score"] + JUMP_PENALTY_PER_PAGE * page
+            )
+            nodes.append(node)
+            pending.append(len(nodes) - 1)
+        for node_id in pending:
+            update(nodes[node_id]["page_index"], node_id)
+
+    best = query(page_count - 1)
+    selected: Dict[str, Dict[str, Any]] = {}
+    while best is not None:
+        node = nodes[best]
+        selected[node["identifier"]] = node["candidate"]
+        best = node["predecessor"]
+    unmatched = [
+        entry["identifier"]
+        for entry in entries
+        if entry["identifier"] not in selected
     ]
-    for index, (item, start_match) in enumerate(matched_order):
-        identifier = _item_identifier(item)
+    return selected, unmatched
+
+
+def _apply_direct_matches(
+    entries: Sequence[Dict[str, Any]],
+    selected: Dict[str, Dict[str, Any]],
+    page_index: Dict[str, Any],
+    page_objects: Sequence[Dict[str, Any]],
+) -> Tuple[int, int]:
+    selected_in_order = [
+        (entry, selected[entry["identifier"]])
+        for entry in entries
+        if entry["identifier"] in selected
+    ]
+    direct_units = 0
+    direct_chunks = 0
+    for index, (entry, start_match) in enumerate(selected_in_order):
         next_start = (
-            matched_order[index + 1][1]["page_index"]
-            if index + 1 < len(matched_order)
-            else len(pages) - 1
+            selected_in_order[index + 1][1]["page_index"]
+            if index + 1 < len(selected_in_order)
+            else len(page_index["pages"]) - 1
         )
         upper = max(start_match["page_index"], next_start)
-        if bounds_by_parent is not None:
-            parent_bounds = bounds_by_parent.get(str(item.get("unit_id") or ""))
-            if parent_bounds:
-                upper = min(upper, parent_bounds[1] - 1)
-        tail_match = _best_page(
-            item,
-            pages,
-            start_match["page_index"],
-            upper,
-            tail=True,
+        tail_profile = _anchor_profile(entry["item"], tail=True)
+        tail_candidates = _top_candidates(
+            tail_profile,
+            page_index,
+            start_index=start_match["page_index"],
+            end_index=upper,
         )
+        end_match: Optional[Dict[str, Any]] = None
+        if tail_candidates:
+            best_tail_score = tail_candidates[0]["score"]
+            near_best = [
+                candidate
+                for candidate in tail_candidates
+                if candidate["score"] >= best_tail_score - 0.06
+            ]
+            end_match = min(
+                near_best,
+                key=lambda candidate: (
+                    candidate["page_index"],
+                    -candidate["score"],
+                ),
+            )
         end_index = (
-            tail_match["page_index"]
-            if tail_match is not None
+            max(start_match["page_index"], end_match["page_index"])
+            if end_match is not None
             else start_match["page_index"]
         )
         confidence = start_match["score"]
-        method = start_match["method"]
-        if tail_match is not None and tail_match["page_index"] > start_match["page_index"]:
-            confidence = (confidence + tail_match["score"]) / 2
+        method = "monotone_dp+" + start_match["method"]
+        if start_match.get("ambiguous"):
+            method += "+sequence_disambiguated"
+            confidence = max(0.0, confidence - 0.055)
+        if end_match is not None and end_index > start_match["page_index"]:
+            confidence = (confidence + end_match["score"]) / 2.0
             method += "+tail"
         _set_alignment(
-            item,
+            entry["item"],
             start_match["page_number"],
             end_index + 1,
             page_objects,
             method,
             confidence,
             start_match["anchor_preview"],
+            evidence="direct",
         )
-        starts[identifier] = start_match
-    return len(starts), unmatched
+        if entry["kind"] == "chunk":
+            direct_chunks += 1
+        else:
+            direct_units += 1
+    return direct_units, direct_chunks
 
 
-def _inherit_unit_ranges(document: Dict[str, Any], page_objects: Sequence[Dict[str, Any]]) -> int:
+def _derive_unit_ranges_from_chunks(
+    document: Dict[str, Any],
+    page_objects: Sequence[Dict[str, Any]],
+) -> int:
+    direct_ranges: Dict[str, List[Dict[str, int]]] = defaultdict(list)
+    confidences: Dict[str, List[float]] = defaultdict(list)
+    for chunk in document.get("chunks") or []:
+        alignment = chunk.get("pdf_alignment")
+        page_range = chunk.get("page_range")
+        unit_id = str(chunk.get("unit_id") or "")
+        if (
+            not unit_id
+            or not isinstance(page_range, dict)
+            or not isinstance(alignment, dict)
+            or alignment.get("evidence") != "direct"
+        ):
+            continue
+        direct_ranges[unit_id].append(page_range)
+        confidences[unit_id].append(float(alignment.get("confidence") or 0.0))
+
+    derived = 0
+    for unit in document.get("structural_units") or []:
+        unit_id = str(unit.get("unit_id") or "")
+        ranges = direct_ranges.get(unit_id)
+        if not ranges:
+            continue
+        start = min(page_range["start"] for page_range in ranges)
+        end = max(page_range["end"] for page_range in ranges)
+        _set_alignment(
+            unit,
+            start,
+            end,
+            page_objects,
+            "direct_chunks_derived",
+            sum(confidences[unit_id]) / len(confidences[unit_id]),
+            evidence="derived",
+        )
+        derived += 1
+    return derived
+
+
+def _inherit_unit_ranges(
+    document: Dict[str, Any],
+    page_objects: Sequence[Dict[str, Any]],
+) -> int:
     units = document.get("structural_units") or []
     by_id = {
         unit.get("unit_id"): unit
@@ -373,7 +813,7 @@ def _inherit_unit_ranges(document: Dict[str, Any], page_objects: Sequence[Dict[s
         if unit.get("unit_id")
     }
     inherited = 0
-    for _iteration in range(4):
+    for _iteration in range(len(units) + 1):
         changed = False
         for unit in reversed(units):
             if isinstance(unit.get("page_range"), dict):
@@ -398,6 +838,7 @@ def _inherit_unit_ranges(document: Dict[str, Any], page_objects: Sequence[Dict[s
                 page_objects,
                 "child_inherited",
                 0.35,
+                evidence="inherited",
             )
             inherited += 1
             changed = True
@@ -426,9 +867,36 @@ def _inherit_chunk_ranges(document: Dict[str, Any], page_objects: Sequence[Dict[
             page_objects,
             "parent_inherited",
             0.25,
+            evidence="inherited",
         )
         inherited += 1
     return inherited
+
+
+def _clear_alignment_state(document: Dict[str, Any]) -> None:
+    document["pages"] = []
+    document["page_refs"] = []
+    document["source_pdf"] = None
+    for unit in document.get("structural_units") or []:
+        unit["page_range"] = None
+        unit.pop("pdf_alignment", None)
+    for chunk in document.get("chunks") or []:
+        chunk["page_range"] = None
+        chunk["page_id"] = None
+        chunk.pop("pdf_alignment", None)
+    metadata = document.setdefault("metadata", {})
+    for key in tuple(metadata):
+        if (
+            key == "pdf_pages"
+            or key == "pdf_text_backend_counts"
+            or key == "pdf_backend_errors"
+            or key == "source_pdf"
+            or key.startswith("pdf_alignment")
+            or key.startswith("source_pdf_")
+            or key.startswith("secondary_pdf_")
+        ):
+            metadata.pop(key, None)
+    metadata["pdf_alignment_version"] = ALIGNMENT_VERSION
 
 
 def _alignment_issue(
@@ -477,9 +945,17 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
         raise
 
 
+def _safe_path_component(value: str, fallback: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "")
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", normalized).strip(".-_")
+    slug = slug[:56] or fallback
+    return "{}-{}".format(slug, make_id(value or fallback))
+
+
 def _page_references(
     page_objects: Sequence[Dict[str, Any]],
-    document_key: str,
+    document_id: str,
+    pdf_identity: str,
     output_base_dir: Optional[os.PathLike[str] | str],
     pages_root_dir: Optional[os.PathLike[str] | str],
 ) -> List[Dict[str, Any]]:
@@ -490,6 +966,11 @@ def _page_references(
         else (output_base / "pages" if output_base else None)
     )
     references: List[Dict[str, Any]] = []
+    document_component = _safe_path_component(document_id, "document")
+    pdf_component = "pdf-{}".format(
+        re.sub(r"[^a-fA-F0-9]", "", pdf_identity)[:20]
+        or make_id(pdf_identity)
+    )
     for page in page_objects:
         reference = {
             "page_id": page["page_id"],
@@ -501,7 +982,8 @@ def _page_references(
         if pages_root is not None:
             page_path = (
                 pages_root
-                / document_key
+                / document_component
+                / pdf_component
                 / "page_{:03d}.json".format(page["page_number"])
             )
             _atomic_write_json(page_path, page)
@@ -527,8 +1009,44 @@ def align_document_to_page_texts(
     aligned = copy.deepcopy(document)
     issues: List[Dict[str, Any]] = []
     document_id = str(aligned.get("document_id") or "")
+    _clear_alignment_state(aligned)
+    metadata = aligned.setdefault("metadata", {})
+    metadata.update(
+        {
+            "pdf_alignment_version": ALIGNMENT_VERSION,
+            "pdf_alignment_requested": True,
+            "source_pdf_sha256": pdf_sha256,
+        }
+    )
+    if source_pdf:
+        aligned["source_pdf"] = Path(source_pdf).name
+        metadata["source_pdf_relative_path"] = str(source_pdf)
     if not page_texts:
-        aligned.setdefault("metadata", {})["pdf_alignment_status"] = "unavailable"
+        metadata.update(
+            {
+                "pdf_alignment_status": "unavailable",
+                "pdf_pages": 0,
+                "source_pdf_sha256": pdf_sha256,
+                "pdf_alignment": {
+                    "version": ALIGNMENT_VERSION,
+                    "unit_count": len(aligned.get("structural_units") or []),
+                    "direct_unit_matches": 0,
+                    "chunk_derived_unit_matches": 0,
+                    "inherited_unit_matches": 0,
+                    "aligned_unit_count": 0,
+                    "unit_coverage": 0.0,
+                    "direct_unit_coverage": 0.0,
+                    "chunk_count": len(aligned.get("chunks") or []),
+                    "alignable_chunk_count": 0,
+                    "direct_chunk_matches": 0,
+                    "inherited_chunk_matches": 0,
+                    "aligned_chunk_count": 0,
+                    "chunk_coverage": 0.0,
+                    "direct_chunk_coverage": 0.0,
+                    "direct_evidence_coverage": 0.0,
+                },
+            }
+        )
         issues.append(
             _alignment_issue(
                 document_id,
@@ -540,13 +1058,22 @@ def align_document_to_page_texts(
         )
         return aligned, issues
 
-    pdf_identity = pdf_sha256 or source_pdf or "pdf"
+    content_identity_payload = json.dumps(
+        {
+            "page_count": len(page_texts),
+            "page_text_sha256": [sha256_str(text) for text in page_texts],
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    pdf_identity = pdf_sha256 or sha256_str(content_identity_payload)
     page_objects = []
     for index, text in enumerate(page_texts):
         page_objects.append(
             {
                 "page_id": "pg_{}_{}".format(
-                    make_id(document_id, pdf_identity, index),
+                    make_id(document_id, pdf_identity, index, sha256_str(text)),
                     str(index).zfill(3),
                 ),
                 "page_number": index + 1,
@@ -560,42 +1087,36 @@ def align_document_to_page_texts(
                 ),
             }
         )
-    pages = _page_features(page_objects)
-
+    page_index = _page_features(page_objects)
     units = aligned.get("structural_units") or []
-    matched_units, initially_unmatched_units = _align_items(
-        units,
-        pages,
+    chunks = aligned.get("chunks") or []
+    entries, _profiles = _direct_alignment_entries(aligned)
+    selected, unmatched_direct_entries = _monotone_matches(
+        entries,
+        page_index,
+    )
+    direct_units, direct_chunks = _apply_direct_matches(
+        entries,
+        selected,
+        page_index,
+        page_objects,
+    )
+    chunk_derived_units = _derive_unit_ranges_from_chunks(
+        aligned,
         page_objects,
     )
     inherited_units = _inherit_unit_ranges(aligned, page_objects)
-    unit_bounds = {
-        unit.get("unit_id"): (
-            unit["page_range"]["start"],
-            unit["page_range"]["end"],
-        )
-        for unit in units
-        if unit.get("unit_id") and isinstance(unit.get("page_range"), dict)
-    }
-    chunks = aligned.get("chunks") or []
-    matched_chunks, initially_unmatched_chunks = _align_items(
-        chunks,
-        pages,
-        page_objects,
-        bounds_by_parent=unit_bounds,
-    )
     inherited_chunks = _inherit_chunk_ranges(aligned, page_objects)
 
     page_refs = _page_references(
         page_objects,
-        str(aligned.get("document_key") or document_id or "document"),
+        document_id or str(aligned.get("document_key") or "document"),
+        pdf_identity,
         output_base_dir,
         pages_root_dir,
     )
     aligned["pages"] = page_refs
     aligned["page_refs"] = page_refs
-    if source_pdf:
-        aligned["source_pdf"] = Path(source_pdf).name
 
     aligned_unit_count = sum(
         isinstance(unit.get("page_range"), dict) for unit in units
@@ -605,67 +1126,85 @@ def align_document_to_page_texts(
     )
     unit_coverage = aligned_unit_count / len(units) if units else 1.0
     chunk_coverage = aligned_chunk_count / len(chunks) if chunks else 1.0
-    direct_unit_coverage = matched_units / len(units) if units else 1.0
-    direct_chunk_coverage = matched_chunks / len(chunks) if chunks else 1.0
-    if unit_coverage >= 0.95 and chunk_coverage >= 0.95:
+    evidenced_unit_matches = direct_units + chunk_derived_units
+    direct_unit_coverage = (
+        evidenced_unit_matches / len(units) if units else 1.0
+    )
+    direct_chunk_coverage = direct_chunks / len(chunks) if chunks else 1.0
+    alignable_chunk_count = sum(
+        entry["kind"] == "chunk" for entry in entries
+    )
+    alignable_unit_count = sum(
+        entry["kind"] == "unit" for entry in entries
+    )
+    direct_entry_matches = direct_chunks + direct_units
+    direct_evidence_coverage = (
+        direct_entry_matches / len(entries) if entries else 0.0
+    )
+    if direct_evidence_coverage >= 0.90:
         status = "aligned"
-    elif unit_coverage >= 0.50 or chunk_coverage >= 0.50:
+    elif direct_evidence_coverage >= 0.40:
         status = "partial"
     else:
         status = "low_coverage"
 
-    metadata = aligned.setdefault("metadata", {})
     metadata.update(
         {
             "pdf_alignment_status": status,
             "pdf_pages": len(page_objects),
             "source_pdf_sha256": pdf_sha256,
             "pdf_alignment": {
+                "version": ALIGNMENT_VERSION,
                 "unit_count": len(units),
-                "direct_unit_matches": matched_units,
+                "alignable_unit_count": alignable_unit_count,
+                "direct_unit_matches": direct_units,
+                "chunk_derived_unit_matches": chunk_derived_units,
                 "inherited_unit_matches": inherited_units,
                 "aligned_unit_count": aligned_unit_count,
                 "unit_coverage": round(unit_coverage, 4),
                 "direct_unit_coverage": round(direct_unit_coverage, 4),
                 "chunk_count": len(chunks),
-                "direct_chunk_matches": matched_chunks,
+                "alignable_chunk_count": alignable_chunk_count,
+                "direct_chunk_matches": direct_chunks,
                 "inherited_chunk_matches": inherited_chunks,
                 "aligned_chunk_count": aligned_chunk_count,
                 "chunk_coverage": round(chunk_coverage, 4),
                 "direct_chunk_coverage": round(direct_chunk_coverage, 4),
+                "direct_evidence_coverage": round(
+                    direct_evidence_coverage,
+                    4,
+                ),
             },
         }
     )
+    selected_identifiers = set(selected)
+    alignable_unit_identifiers = {
+        entry["identifier"]
+        for entry in entries
+        if entry["kind"] == "unit"
+    }
+    alignable_chunk_identifiers = {
+        entry["identifier"]
+        for entry in entries
+        if entry["kind"] == "chunk"
+    }
     remaining_units = [
-        identifier
-        for identifier in initially_unmatched_units
-        if not isinstance(
-            next(
-                (
-                    unit.get("page_range")
-                    for unit in units
-                    if unit.get("unit_id") == identifier
-                ),
-                None,
-            ),
-            dict,
-        )
+        str(unit.get("unit_id") or "")
+        for unit in units
+        if unit.get("unit_id")
+        and not isinstance(unit.get("page_range"), dict)
     ]
     remaining_chunks = [
         identifier
-        for identifier in initially_unmatched_chunks
-        if not isinstance(
-            next(
-                (
-                    chunk.get("page_range")
-                    for chunk in chunks
-                    if chunk.get("chunk_id") == identifier
-                ),
-                None,
-            ),
-            dict,
-        )
+        for identifier in unmatched_direct_entries
+        if identifier in alignable_chunk_identifiers
     ]
+    unmatched_alignable_units = sorted(
+        alignable_unit_identifiers - selected_identifiers
+    )
+    for identifier in unmatched_alignable_units:
+        if identifier not in remaining_units:
+            remaining_units.append(identifier)
     if remaining_units or remaining_chunks:
         issues.append(
             _alignment_issue(
@@ -687,30 +1226,86 @@ def align_document_to_page_texts(
 def extract_pdf_page_texts(
     pdf_path: os.PathLike[str] | str,
 ) -> Tuple[List[str], List[str], Dict[str, Any]]:
-    """Extract one text stream per page, choosing the richer local backend."""
+    """Extract one text stream per page with independently guarded backends."""
     path = Path(pdf_path)
     raw = path.read_bytes()
-    reader = PdfReader(io.BytesIO(raw))
     fitz_texts: List[str] = []
+    backend_errors: Dict[str, str] = {}
     if fitz is not None:
-        with fitz.open(stream=raw, filetype="pdf") as fitz_document:
-            fitz_texts = [
-                (page.get_text("text") or "").replace("\x00", "")
-                for page in fitz_document
-            ]
+        try:
+            with fitz.open(stream=raw, filetype="pdf") as fitz_document:
+                fitz_texts = [
+                    (page.get_text("text") or "").replace("\x00", "")
+                    for page in fitz_document
+                ]
+        except Exception as exc:  # pragma: no cover - backend-specific failures
+            backend_errors["pymupdf"] = "{}: {}".format(
+                type(exc).__name__,
+                exc,
+            )
 
+    pypdf_texts: List[str] = []
+    fallback_indices = [
+        index
+        for index, text in enumerate(fitz_texts)
+        if len(normalize_alignment_text(text)) < 16
+    ]
+    should_try_pypdf = not fitz_texts or bool(fallback_indices)
+    if should_try_pypdf:
+        try:
+            reader = PdfReader(io.BytesIO(raw))
+            pypdf_texts = []
+            for page in reader.pages:
+                try:
+                    pypdf_texts.append(
+                        (page.extract_text() or "").replace("\x00", "")
+                    )
+                except Exception as exc:  # pragma: no cover - malformed pages
+                    backend_errors.setdefault(
+                        "pypdf_page",
+                        "{}: {}".format(type(exc).__name__, exc),
+                    )
+                    pypdf_texts.append("")
+        except Exception as exc:
+            backend_errors["pypdf"] = "{}: {}".format(
+                type(exc).__name__,
+                exc,
+            )
+
+    if not fitz_texts and not pypdf_texts and backend_errors:
+        raise RuntimeError(
+            "No PDF text backend could read {} ({})".format(
+                path,
+                "; ".join(
+                    "{}={}".format(name, error)
+                    for name, error in sorted(backend_errors.items())
+                ),
+            )
+        )
+
+    page_count = max(len(fitz_texts), len(pypdf_texts))
     texts: List[str] = []
     backends: List[str] = []
     backend_counts: Counter[str] = Counter()
-    for index, page in enumerate(reader.pages):
-        pypdf_text = (page.extract_text() or "").replace("\x00", "")
+    for index in range(page_count):
+        pypdf_text = (
+            pypdf_texts[index] if index < len(pypdf_texts) else ""
+        )
         fitz_text = fitz_texts[index] if index < len(fitz_texts) else ""
         pypdf_normalized = normalize_alignment_text(pypdf_text)
         fitz_normalized = normalize_alignment_text(fitz_text)
-        if fitz_normalized and len(fitz_normalized) > len(pypdf_normalized) * 1.05:
+        if fitz_normalized:
             selected, backend = fitz_text, "pymupdf"
-        else:
+            if (
+                pypdf_normalized
+                and len(pypdf_normalized) > len(fitz_normalized) * 1.25
+            ):
+                selected, backend = pypdf_text, "pypdf"
+        elif pypdf_normalized:
             selected, backend = pypdf_text, "pypdf"
+        else:
+            selected = fitz_text or pypdf_text
+            backend = "pymupdf" if index < len(fitz_texts) else "pypdf"
         texts.append(selected)
         backends.append(backend)
         backend_counts[backend] += 1
@@ -719,7 +1314,12 @@ def extract_pdf_page_texts(
         "bytes": len(raw),
         "page_count": len(texts),
         "backend_counts": dict(sorted(backend_counts.items())),
-        "secondary_backend": "pymupdf" if fitz is not None else None,
+        "secondary_backend": (
+            "pypdf"
+            if fitz_texts
+            else ("pymupdf" if fitz is not None else None)
+        ),
+        "backend_errors": backend_errors,
     }
 
 
@@ -745,6 +1345,8 @@ def align_document_with_pdf(
             "source_pdf_bytes": pdf_metadata["bytes"],
             "pdf_text_backend_counts": pdf_metadata["backend_counts"],
             "secondary_pdf_backend": pdf_metadata["secondary_backend"],
+            "pdf_backend_errors": pdf_metadata["backend_errors"],
+            "pdf_alignment_version": ALIGNMENT_VERSION,
         }
     )
     return aligned, issues

@@ -550,7 +550,19 @@ def validate_text_chunk(
     text = chunk.get("text")
     chunk_type = chunk.get("chunk_type")
     chunk_citation = citation(chunk)
-    if chunk_type != "table_rows" and (not isinstance(text, str) or not text.strip()):
+    available_source_asset = (
+        chunk_type == "source_asset"
+        and chunk.get("source_asset_status") == "available"
+        and isinstance(chunk.get("source_asset"), str)
+        and bool(chunk["source_asset"].strip())
+        and isinstance(chunk.get("source_asset_sha256"), str)
+        and bool(chunk["source_asset_sha256"].strip())
+    )
+    if (
+        chunk_type != "table_rows"
+        and not available_source_asset
+        and (not isinstance(text, str) or not text.strip())
+    ):
         ctx.add(
             "warning",
             "EMPTY_TEXT_CHUNK",

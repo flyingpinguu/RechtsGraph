@@ -33,8 +33,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 
 TOOL_NAME = "batch_extract_gii_xml"
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.2.0"
 MANIFEST_SCHEMA_VERSION = "1.0"
+EXPECTED_EXTRACTOR_VERSION = "1.0.0"
+EXPECTED_ALIGNMENT_VERSION = "2.0.0"
 SUCCESS_SOURCE_STATUSES = frozenset({"ok", "ok_existing"})
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -329,7 +331,29 @@ def validate_resumable_output(
     output_path: Path,
     entry: Mapping[str, Any],
     expected_package_sha256: Optional[str],
+    *,
+    source_path: Path,
+    align_pdf: bool,
+    pdf_path: Optional[Path],
+    pdf_relative_path: Optional[str],
+    pdf_expected_sha256: Optional[str],
 ) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+    if not source_path.is_file():
+        return False, None, "current source package is missing"
+    try:
+        current_package_sha256 = file_sha256(source_path)
+    except OSError as exc:
+        return False, None, "current source package is unreadable: {}".format(exc)
+    if (
+        expected_package_sha256
+        and current_package_sha256 != expected_package_sha256
+    ):
+        return (
+            False,
+            None,
+            "current source package hash differs from the downloader manifest",
+        )
+
     try:
         payload = json.loads(output_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -345,15 +369,68 @@ def validate_resumable_output(
     expected_item_id = entry.get("item_id")
     if expected_item_id and source_entry.get("item_id") != expected_item_id:
         return False, None, "existing output belongs to another manifest entry"
-    if expected_package_sha256:
-        metadata = documents[0].get("metadata") if isinstance(documents[0], dict) else None
-        actual_hash = (
-            metadata.get("source_package_sha256")
-            if isinstance(metadata, dict)
-            else None
-        )
-        if actual_hash != expected_package_sha256:
-            return False, None, "existing output source package hash changed"
+    extractor = payload.get("extractor")
+    if (
+        not isinstance(extractor, dict)
+        or extractor.get("name") != "gii_xml"
+        or extractor.get("version") != EXPECTED_EXTRACTOR_VERSION
+    ):
+        return False, None, "existing output used an obsolete XML extractor"
+    batch_extractor = payload.get("batch_extractor")
+    if (
+        not isinstance(batch_extractor, dict)
+        or batch_extractor.get("name") != TOOL_NAME
+        or batch_extractor.get("version") != TOOL_VERSION
+    ):
+        return False, None, "existing output used an obsolete batch extractor"
+
+    document = documents[0]
+    metadata = document.get("metadata") if isinstance(document, dict) else None
+    if not isinstance(metadata, dict):
+        return False, None, "existing output lacks document metadata"
+    if (
+        metadata.get("gii_xml_extractor_version")
+        != EXPECTED_EXTRACTOR_VERSION
+    ):
+        return False, None, "existing document used an obsolete XML extractor"
+    if metadata.get("source_package_sha256") != current_package_sha256:
+        return False, None, "existing output was extracted from different source bytes"
+    if metadata.get("pdf_alignment_requested") is not align_pdf:
+        return False, None, "existing output used a different PDF-alignment mode"
+    if not align_pdf:
+        return True, payload, None
+
+    if metadata.get("pdf_alignment_version") != EXPECTED_ALIGNMENT_VERSION:
+        return False, None, "existing output used an obsolete PDF-alignment version"
+    if metadata.get("source_pdf_relative_path") != pdf_relative_path:
+        return False, None, "existing output used a different PDF source path"
+    if metadata.get("source_pdf_manifest_sha256") != pdf_expected_sha256:
+        return False, None, "existing output used different PDF manifest provenance"
+
+    alignment_status = str(metadata.get("pdf_alignment_status") or "")
+    if not pdf_relative_path:
+        if (
+            alignment_status == "unavailable"
+            and metadata.get("pdf_alignment_reason") == "no_pdf_manifest_match"
+        ):
+            return True, payload, None
+        return False, None, "existing output has stale no-PDF alignment state"
+
+    if pdf_path is None or not pdf_path.is_file():
+        if (
+            alignment_status == "unavailable"
+            and metadata.get("pdf_alignment_reason") == "pdf_source_missing"
+        ):
+            return True, payload, None
+        return False, None, "existing output has stale missing-PDF alignment state"
+
+    current_pdf_sha256 = file_sha256(pdf_path)
+    if pdf_expected_sha256 and current_pdf_sha256 != pdf_expected_sha256:
+        return False, None, "current PDF hash differs from the downloader manifest"
+    if metadata.get("source_pdf_sha256") != current_pdf_sha256:
+        return False, None, "existing output was aligned to different PDF bytes"
+    if alignment_status not in {"aligned", "partial", "low_coverage"}:
+        return False, None, "existing PDF alignment is incomplete or failed"
     return True, payload, None
 
 
@@ -368,7 +445,10 @@ def _base_result(task: Mapping[str, Any]) -> Dict[str, Any]:
         "source_status": entry.get("status"),
         "source_relative_path": task["source_relative_path"],
         "source_package_sha256": task.get("source_package_sha256"),
+        "extractor_version": EXPECTED_EXTRACTOR_VERSION,
+        "batch_tool_version": TOOL_VERSION,
         "pdf_relative_path": task.get("pdf_relative_path"),
+        "pdf_expected_sha256": task.get("pdf_expected_sha256"),
     }
 
 
@@ -420,6 +500,15 @@ def extract_one(task: Dict[str, Any]) -> Dict[str, Any]:
                 output_path,
                 entry,
                 task.get("source_package_sha256"),
+                source_path=source_path,
+                align_pdf=bool(task.get("align_pdf")),
+                pdf_path=(
+                    Path(task["pdf_path"])
+                    if task.get("pdf_path")
+                    else None
+                ),
+                pdf_relative_path=task.get("pdf_relative_path"),
+                pdf_expected_sha256=task.get("pdf_expected_sha256"),
             )
             if valid and payload is not None:
                 result.update(
@@ -438,7 +527,18 @@ def extract_one(task: Dict[str, Any]) -> Dict[str, Any]:
 
         # Import inside workers so process startup does not load the PDF pipeline.
         sys.path.insert(0, str(PROJECT_ROOT))
-        from normtext_extractor.gii_xml import extract_package  # noqa: WPS433
+        from normtext_extractor.gii_xml import (  # noqa: WPS433
+            GII_XML_EXTRACTOR_VERSION,
+            extract_package,
+        )
+
+        if GII_XML_EXTRACTOR_VERSION != EXPECTED_EXTRACTOR_VERSION:
+            raise RuntimeError(
+                "batch expects GII XML extractor {}, adapter provides {}".format(
+                    EXPECTED_EXTRACTOR_VERSION,
+                    GII_XML_EXTRACTOR_VERSION,
+                )
+            )
 
         source_manifest_entry = reconciled_source_manifest_entry(entry)
         payload = extract_package(source_path, source_manifest_entry)
@@ -462,17 +562,51 @@ def extract_one(task: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError(
                 "source package hash differs from the downloader manifest"
             )
+        extractor = payload.get("extractor")
+        if (
+            not isinstance(extractor, dict)
+            or extractor.get("name") != "gii_xml"
+            or extractor.get("version") != EXPECTED_EXTRACTOR_VERSION
+        ):
+            raise ValueError("XML extractor returned unexpected version provenance")
 
         document = documents[0]
+        document_metadata = document.setdefault("metadata", {})
+        if (
+            document_metadata.get("gii_xml_extractor_version")
+            != EXPECTED_EXTRACTOR_VERSION
+        ):
+            raise ValueError("XML document lacks current extractor provenance")
+        payload["batch_extractor"] = {
+            "name": TOOL_NAME,
+            "version": TOOL_VERSION,
+        }
         pdf_path_value = task.get("pdf_path")
         pdf_relative_path = task.get("pdf_relative_path")
+        pdf_expected_sha256 = task.get("pdf_expected_sha256")
+        document_metadata.update(
+            {
+                "pdf_alignment_requested": bool(task.get("align_pdf")),
+                "source_pdf_relative_path": pdf_relative_path,
+                "source_pdf_manifest_sha256": pdf_expected_sha256,
+            }
+        )
         if task.get("align_pdf") and pdf_relative_path:
             if pdf_path_value and Path(pdf_path_value).is_file():
                 try:
                     from normtext_extractor.gii_pdf_alignment import (  # noqa: WPS433
+                        ALIGNMENT_VERSION,
                         align_document_with_pdf,
                     )
 
+                    actual_pdf_sha256 = file_sha256(Path(pdf_path_value))
+                    if (
+                        pdf_expected_sha256
+                        and actual_pdf_sha256 != pdf_expected_sha256
+                    ):
+                        raise ValueError(
+                            "secondary PDF hash differs from the downloader manifest"
+                        )
                     aligned_document, alignment_issues = align_document_with_pdf(
                         document,
                         Path(pdf_path_value),
@@ -482,10 +616,28 @@ def extract_one(task: Dict[str, Any]) -> Dict[str, Any]:
                         alignment_issues
                     )
                     document = aligned_document
+                    # The alignment helper exposes a local basename; the batch
+                    # contract keeps the downloader's stable relative PDF path.
+                    document["source_pdf"] = pdf_relative_path
+                    document.setdefault("metadata", {}).update(
+                        {
+                            "pdf_alignment_requested": True,
+                            "pdf_alignment_version": ALIGNMENT_VERSION,
+                            "source_pdf_relative_path": pdf_relative_path,
+                            "source_pdf_manifest_sha256": pdf_expected_sha256,
+                        }
+                    )
                 except Exception as alignment_exc:
-                    document.setdefault("metadata", {})[
-                        "pdf_alignment_status"
-                    ] = "error"
+                    document_metadata = document.setdefault("metadata", {})
+                    document_metadata.update(
+                        {
+                            "pdf_alignment_status": "error",
+                            "pdf_alignment_version": EXPECTED_ALIGNMENT_VERSION,
+                            "pdf_alignment_reason": "alignment_failed",
+                            "source_pdf_relative_path": pdf_relative_path,
+                            "source_pdf_manifest_sha256": pdf_expected_sha256,
+                        }
+                    )
                     payload.setdefault("extraction_issues", []).append(
                         _alignment_issue(
                             str(document.get("document_id") or ""),
@@ -499,9 +651,13 @@ def extract_one(task: Dict[str, Any]) -> Dict[str, Any]:
                         )
                     )
             else:
-                document.setdefault("metadata", {})[
-                    "pdf_alignment_status"
-                ] = "unavailable"
+                document_metadata.update(
+                    {
+                        "pdf_alignment_status": "unavailable",
+                        "pdf_alignment_version": EXPECTED_ALIGNMENT_VERSION,
+                        "pdf_alignment_reason": "pdf_source_missing",
+                    }
+                )
                 payload.setdefault("extraction_issues", []).append(
                     _alignment_issue(
                         str(document.get("document_id") or ""),
@@ -511,11 +667,20 @@ def extract_one(task: Dict[str, Any]) -> Dict[str, Any]:
                     )
                 )
         elif task.get("align_pdf"):
-            document.setdefault("metadata", {})[
-                "pdf_alignment_status"
-            ] = "unavailable"
-            document["metadata"]["pdf_alignment_reason"] = (
-                "no_pdf_manifest_match"
+            document_metadata.update(
+                {
+                    "pdf_alignment_status": "unavailable",
+                    "pdf_alignment_version": EXPECTED_ALIGNMENT_VERSION,
+                    "pdf_alignment_reason": "no_pdf_manifest_match",
+                }
+            )
+        else:
+            document_metadata.update(
+                {
+                    "pdf_alignment_status": "not_requested",
+                    "pdf_alignment_version": None,
+                    "pdf_alignment_reason": "disabled",
+                }
             )
 
         atomic_write_json(output_path, payload)
@@ -570,9 +735,13 @@ def _task_for(
         source_setup_error = None
     pdf_relative_path: Optional[str] = None
     pdf_path: Optional[Path] = None
+    pdf_expected_sha256: Optional[str] = None
     pdf_matches = _successful_pdf_matches(entry)
     if config.align_pdf and pdf_matches:
         pdf_relative_path = str(pdf_matches[0]["relative_file_path"])
+        pdf_expected_sha256 = (
+            str(pdf_matches[0].get("sha256") or "").strip() or None
+        )
         if config.pdf_dir is not None:
             try:
                 pdf_path = _safe_source_path(
@@ -593,6 +762,7 @@ def _task_for(
         "align_pdf": config.align_pdf,
         "pdf_path": str(pdf_path) if pdf_path is not None else None,
         "pdf_relative_path": pdf_relative_path,
+        "pdf_expected_sha256": pdf_expected_sha256,
         "output_dir": str(config.output_dir),
         "output_path": str(output_path),
         "resume": config.resume,
@@ -694,9 +864,14 @@ def build_batch_manifest(
         "tool": {
             "name": TOOL_NAME,
             "version": TOOL_VERSION,
+            "extractor_version": EXPECTED_EXTRACTOR_VERSION,
             "script": str(script_path),
             "script_sha256": file_sha256(script_path),
             "python": platform.python_version(),
+        },
+        "extractor": {
+            "name": "gii_xml",
+            "version": EXPECTED_EXTRACTOR_VERSION,
         },
         "source_manifest": {
             "path": str(config.manifest_path.resolve()),
@@ -709,6 +884,9 @@ def build_batch_manifest(
         "run": {
             "workers": config.workers,
             "align_pdf": config.align_pdf,
+            "alignment_version": (
+                EXPECTED_ALIGNMENT_VERSION if config.align_pdf else None
+            ),
             "pdf_dir": (
                 str(config.pdf_dir.resolve())
                 if config.pdf_dir is not None

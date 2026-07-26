@@ -1,7 +1,39 @@
-# STATUS.md (Stand: 2026-07-04)
+# STATUS.md (Stand: 2026-07-26)
+
+## 0. XML-first Cutover
+
+Fuer Quellen von `gesetze-im-internet.de` ist die semantische Extraktion von
+PDF auf das GII-Katalog-XML umgestellt. Der GII-XML-Adapter uebersetzt das
+GII-Schema in denselben kanonischen Raw-Vertrag, den Content-Graph,
+Referenzextraktion und Neo4j-Export bereits verwenden. PDFs sind nur noch
+sekundaere Seiten-/Layout-Provenienz sowie der explizite Fallback fuer acht
+Eintraege ohne XML.
+
+Das ist eine technische Source-of-Truth-Entscheidung, keine Aussage zur
+rechtlichen Amtlichkeit: GII enthaelt konsolidierte, nicht amtliche Fassungen;
+die amtliche Verkuendung erfolgt im Bundesgesetzblatt.
+
+Ergebnis des Vollkorpuslaufs:
+
+- 6.125/6.125 GII-Katalog-XML-Pakete erfolgreich verarbeitet;
+- 5.954 XML-Dokumente mit passendem PDF, 171 ohne PDF;
+- acht PDF-only-Eintraege separat erfolgreich verarbeitet;
+- 139.428 Structural Units und 324.989 Chunks;
+- 11.567 CALS-Tabellen mit 236.318 Zeilen;
+- keine dokumentweiten ID-Kollisionen, fehlenden Assets oder ungueltigen
+  Tabellenformen im unabhaengigen Audit;
+- konservative PDF-Seitenzuordnung fuer 95,27 % der Chunks;
+- die Pflichtregressionen ErsatzbaustoffV Tabelle 1 (20 x 18), EGBGB
+  Art. 232 und AbfKlaerV-Hierarchie bestehen.
+
+Die Vorversion ist als Commit `4341102` und Tag
+`pre-gii-xml-migration` erhalten. Architektur, Befehle, Ergebnisse und
+Entscheidung gegen Docling als primaere Semantikquelle stehen in
+`XML_MIGRATION_PLAN.md`.
 
 ## 1. Projektziele & Aktueller Stand
-Das Projekt extrahiert komplexe rechtliche Normtexte aus PDFs (Abfall- und Gefahrgutrecht) und überführt diese in einen Graphen (Neo4j). Der Fokus liegt auf deterministischer Extraktion für Struktur und Querverweise.
+Das Projekt extrahiert komplexe rechtliche Normtexte aus XML sowie PDFs
+(Abfall- und Gefahrgutrecht) und überführt diese in einen Graphen (Neo4j). Der Fokus liegt auf deterministischer Extraktion für Struktur und Querverweise.
 Die erste Phase der Pipeline ist weitgehend stabil: Dokumente werden in `StructuralUnits` (Paragraphen, Anlagen, Tabellen) und feinere `Chunks` zerlegt, Referenzen (z.B. "§ 8 Absatz 1") werden automatisch aufgelöst und als `REFERS_TO`-Kanten im Graphen abgebildet.
 
 ## 2. Pipeline-Architektur (`pdf-neo4j-pipeline/scripts/`)

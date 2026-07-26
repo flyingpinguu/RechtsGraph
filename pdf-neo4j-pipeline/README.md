@@ -1,27 +1,108 @@
-# PDF Neo4j Pipeline
+# GII XML/PDF Neo4j Pipeline
 
 Deterministische Normtext-Pipeline fuer die erste GraphRAG-Schicht.
+
+Fuer `gesetze-im-internet.de` ist XML jetzt die primaere technische
+Inhaltsquelle:
+
+- XML liefert Wortlaut, Metadaten, Normhierarchie, Listen, Fussnoten,
+  Anlagen und CALS-Tabellen einschliesslich Zellspannen.
+- Das passende PDF liefert nur sekundaere Provenienz wie Seitenbereiche und
+  bleibt visuelle Referenz.
+- Fehlt ein sicherer PDF-Treffer, bleibt der XML-Inhalt vollstaendig und der
+  Seitenbereich bewusst leer.
+- Nur acht Korpus-Eintraege ohne offizielles XML laufen ueber den erhaltenen
+  deterministischen PDF-Fallback.
+
+Der **GII-XML-Adapter** ist die projektspezifische Uebersetzung aus dem
+offiziellen GII-XML/DTD in den bestehenden kanonischen Vertrag aus
+`Document`, `StructuralUnit` und `Chunk`. Er ist damit kein allgemeiner
+XML-Reader und kein externes Produkt.
+
+Die alte PDF-zentrierte Version bleibt durch Commit `4341102` und Tag
+`pre-gii-xml-migration` reproduzierbar.
 
 ## Aktueller Stand
 
 Aktive Skripte:
 
+- `scripts/download_gii_xml.py`
+- `scripts/batch_extract_gii_xml.py`
+- `scripts/batch_extract_gii_pdf_fallbacks.py`
+- `scripts/audit_gii_xml_corpus.py`
 - `scripts/extract_normtext.py`
 - `scripts/build_review_shards.py`
 - `scripts/extract_content_nodes.py`
 - `scripts/extract_reference_relations.py`
 - `scripts/export_neo4j_cypher.py`
 
-Aktive Artefakte:
+Vollkorpus-Stand vom 2026-07-26:
 
-- `output/raw_versatzv_current.json`
-- `output/pages/versatzv/page_001.json` bis `page_015.json`
-- `output/review_shards/VersatzV_current/`
+- 6.125 GII-Katalog-XML-Pakete heruntergeladen und erfolgreich adaptiert.
+- 5.954 XML-Dokumente mit lokalem PDF, 171 XML-Dokumente ohne PDF.
+- Acht explizite PDF-Fallbacks fuer Eintraege ohne offizielles XML.
+- 139.428 Structural Units, 324.989 Chunks und 11.567 CALS-Tabellen.
+- 95,27 % der XML-Chunks erhielten konservativ abgeleitete PDF-Seitenbelege.
+- Vollstaendig eindeutige Dokument-, Unit- und Chunk-IDs; keine fehlenden
+  Quelldateien oder Tabellenformfehler im unabhaengigen Korpusaudit.
+- Neun verbleibende `POSSIBLE_MISSED_TABLE`-Warnungen wurden einzeln
+  geprueft: sieben sind Titelzuordnungswarnungen bei vollstaendig vorhandenen
+  CALS-Zellen, zwei sind bereits im GII-XML als nicht darstellbar
+  gekennzeichnete Quellluecken.
 
-Alte Review-Laeufe, Usage-Logs, Review-Prompts und Zwischenversionen wurden
-entfernt. Lokale Reviewer werden vorerst nicht weiter genutzt.
+Die generierten Korpora liegen unter `gesetze_im_internet_xml/`,
+`output/gii_xml/` und `output/gii_pdf_fallbacks/` und werden nicht committet.
+„Primaer“ bezeichnet hier die technische Source-of-Truth-Entscheidung der
+Pipeline, nicht den rechtlichen Status: GII stellt konsolidierte, nicht
+amtliche Fassungen bereit; fuer die amtliche Verkuendung bleibt das
+Bundesgesetzblatt massgeblich.
 
-## Extraktion
+## XML-Vollkorpus
+
+Alle Befehle koennen aus diesem Verzeichnis mit den dokumentierten Defaults
+ausgefuehrt werden:
+
+```bash
+# Offiziellen Tageskatalog lesen, XML-ZIPs atomar laden und mit dem
+# vorhandenen PDF-Manifest abgleichen.
+./.venv/bin/python scripts/download_gii_xml.py --workers 8 --resume
+
+# XML in den kanonischen Raw-Vertrag ueberfuehren und, soweit sicher
+# moeglich, PDF-Seitenbelege anhaengen.
+./.venv/bin/python scripts/batch_extract_gii_xml.py --workers 8 --resume
+
+# Nur die acht manifestierten Eintraege ohne XML verarbeiten.
+./.venv/bin/python scripts/batch_extract_gii_pdf_fallbacks.py \
+  --workers 2 --resume
+
+# Vollstaendigkeit, IDs, Hierarchie, Assets, Tabellen und bekannte
+# Komplexfaelle unabhaengig pruefen.
+./.venv/bin/python scripts/audit_gii_xml_corpus.py --require-hard-cases
+
+./.venv/bin/python scripts/validate_parsed_jsons.py \
+  --input output/gii_xml/raw \
+  --recursive \
+  --skip-page-files \
+  --fail-on error \
+  --report output/gii_xml/validation/parsed_json_validation.md \
+  --json-report output/gii_xml/validation/parsed_json_validation.json
+```
+
+`--force` baut einen Korpus neu auf; `--resume` verwendet nur Artefakte
+wieder, deren Quellhash, Modus und Alignment-Version noch passen. Downloads
+und Raw-Ausgaben werden zuerst in Staging-Dateien geschrieben und erst nach
+Validierung atomar sichtbar gemacht. Ein fehlendes oder nicht ausrichtbares
+PDF ist kein XML-Extraktionsfehler. Die acht nachweislich nur als PDF
+vorliegenden Eintraege werden im Downloader als `xml_unavailable`, nicht als
+Prozessfehler, ausgewiesen und danach vom engen PDF-Fallback uebernommen.
+
+Der ausfuehrliche Entscheidungs- und Implementierungsnachweis steht in
+`../XML_MIGRATION_PLAN.md`.
+
+## Legacy-PDF-Extraktion
+
+Die PDF-Extraktion bleibt fuer Quellen ausserhalb des GII-XML-Korpus und als
+expliziter Fallback erhalten:
 
 ```bash
 cd /Users/christinck/Documents/graph_database/pdf-neo4j-pipeline

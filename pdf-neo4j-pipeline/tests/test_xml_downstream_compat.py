@@ -185,6 +185,53 @@ def test_aligned_xml_page_numbers_do_not_require_duplicate_page_text_files(
     assert "NO_PAGE_REFS" not in codes
 
 
+def test_validator_allows_verified_asset_without_text_only(tmp_path):
+    available_asset = raw_chunk(
+        "unit_asset",
+        "chunk_asset",
+        "test_available_asset",
+        " ",
+    )
+    available_asset.update(
+        {
+            "chunk_type": "source_asset",
+            "source_asset": "diagram.jpg",
+            "source_asset_status": "available",
+            "source_asset_sha256": "a" * 64,
+        }
+    )
+    missing_asset = copy.deepcopy(available_asset)
+    missing_asset.update(
+        {
+            "chunk_id": "chunk_missing_asset",
+            "global_key": "test_missing_asset",
+            "legal_citation": "test_missing_asset",
+            "source_asset_status": "missing",
+            "source_asset_sha256": None,
+        }
+    )
+    semantic_chunk = raw_chunk(
+        "unit_text",
+        "chunk_text",
+        "test_empty_semantic_text",
+        " ",
+    )
+    context = validator.ValidationContext(tmp_path / "asset_validation.json")
+
+    for chunk in (available_asset, missing_asset, semantic_chunk):
+        validator.validate_text_chunk(context, chunk, "doc_xml")
+
+    empty_findings = [
+        finding
+        for finding in context.findings
+        if finding.code == "EMPTY_TEXT_CHUNK"
+    ]
+    assert {finding.citation for finding in empty_findings} == {
+        "test_missing_asset",
+        "test_empty_semantic_text",
+    }
+
+
 def test_content_graph_preserves_xml_provenance_and_source_order():
     early = raw_unit(
         "doc_xml",

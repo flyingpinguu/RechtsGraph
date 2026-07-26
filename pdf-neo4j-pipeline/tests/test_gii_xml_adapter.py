@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from normtext_extractor.gii_xml import (
+    GII_XML_EXTRACTOR_VERSION,
     extract_document_from_xml,
     extract_package,
     read_gii_xml_package,
@@ -139,14 +140,244 @@ def test_adapter_merges_horizontal_xml_table_continuations(tmp_path):
     )
 
 
+def test_explicit_cals_title_wins_over_unavailable_table_placeholder(tmp_path):
+    source = """<dokumente doknr="BJNRCONFLICT">
+      <norm doknr="BJNRCONFLICT"><metadaten>
+        <jurabk>ConflictV</jurabk><amtabk>ConflictV</amtabk>
+        <langue>Tabellenkonfliktverordnung</langue>
+      </metadaten></norm>
+      <norm doknr="BJNRCONFLICTANNEX"><metadaten>
+        <jurabk>ConflictV</jurabk><enbez>Anlage 1</enbez>
+      </metadaten><textdaten><text><Content>
+        <P>Tabelle 3: Nicht verfügbare Messwerte<BR/>
+          ... (Tabelle nicht darstellbar, Fundstelle: BGBl. I 2020, 3)<BR/>
+          <table frame="all">
+            <Title>Tabelle 4: Faktoren</Title>
+            <tgroup cols="2">
+              <thead><row><entry>n</entry><entry>Faktor</entry></row></thead>
+              <tbody><row><entry>5</entry><entry>1,5</entry></row></tbody>
+            </tgroup>
+          </table>
+        </P>
+      </Content></text></textdaten></norm>
+    </dokumente>"""
+
+    document, issues = extract_document_from_xml(write_xml(tmp_path, source))
+
+    tables = [
+        unit
+        for unit in document["structural_units"]
+        if unit["unit_type"] == "table"
+    ]
+    assert [(table["label"], table["title"]) for table in tables] == [
+        ("Tabelle 4", "Faktoren")
+    ]
+    assert tables[0]["columns"] == ["n", "Faktor"]
+    assert tables[0]["table_data"]["body_matrix"] == [["5", "1,5"]]
+    placeholder = next(
+        chunk
+        for chunk in document["chunks"]
+        if chunk.get("source_xml_unavailable_table")
+    )
+    assert placeholder["source_xml_table_label"] == "Tabelle 3"
+    assert "Tabelle 3: Nicht verfügbare Messwerte" in placeholder["text"]
+    assert "Tabelle nicht darstellbar" in placeholder["text"]
+    assert not any(issue["severity"] == "error" for issue in issues)
+
+
+def test_numbered_cals_title_labels_table_without_preceding_cue(tmp_path):
+    source = """<dokumente doknr="BJNRTITLE">
+      <norm doknr="BJNRTITLE"><metadaten>
+        <jurabk>TitleV</jurabk><amtabk>TitleV</amtabk>
+        <langue>Tabellentitelverordnung</langue>
+      </metadaten></norm>
+      <norm doknr="BJNRTITLEANNEX"><metadaten>
+        <jurabk>TitleV</jurabk><enbez>Anlage 1</enbez>
+      </metadaten><textdaten><text><Content>
+        <P>Dieser Text bleibt als eigener Block erhalten.</P>
+        <table frame="all">
+          <Title>Tabelle 7: Messwerte</Title>
+          <tgroup cols="2">
+            <thead><row><entry>Parameter</entry><entry>Wert</entry></row></thead>
+            <tbody><row><entry>pH</entry><entry>7</entry></row></tbody>
+          </tgroup>
+        </table>
+      </Content></text></textdaten></norm>
+    </dokumente>"""
+
+    document, issues = extract_document_from_xml(write_xml(tmp_path, source))
+
+    table = next(
+        unit
+        for unit in document["structural_units"]
+        if unit["unit_type"] == "table"
+    )
+    assert table["label"] == "Tabelle 7"
+    assert table["number"] == "7"
+    assert table["title"] == "Messwerte"
+    assert any(
+        chunk["text"] == "Dieser Text bleibt als eigener Block erhalten."
+        for chunk in document["chunks"]
+    )
+    assert not any(issue["severity"] == "error" for issue in issues)
+
+
+def test_real_beschussv_keeps_table_3_placeholder_and_labels_table_4():
+    corpus_document = (
+        Path(__file__).resolve().parents[2]
+        / "gesetze_im_internet_xml"
+        / "documents"
+        / "beschussv-6097b266e41e"
+    )
+    packages = sorted(corpus_document.glob("*/source.xml.zip"))
+    if not packages:
+        pytest.skip("downloaded BeschussV XML package is not available")
+
+    document, issues = extract_document_from_xml(packages[-1])
+
+    annex = next(
+        unit
+        for unit in document["structural_units"]
+        if unit["legal_citation"] == "BeschussV Anlage III"
+    )
+    table_4 = next(
+        unit
+        for unit in document["structural_units"]
+        if unit.get("parent_unit_id") == annex["unit_id"]
+        and unit.get("unit_type") == "table"
+        and unit.get("label") == "Tabelle 4"
+    )
+    assert table_4["title"] == "Faktoren zur Berechnung der Anteilsgrenzen"
+    assert table_4["row_count"] == 28
+    placeholder = next(
+        chunk
+        for chunk in document["chunks"]
+        if chunk.get("unit_id") == annex["unit_id"]
+        and chunk.get("source_xml_table_label") == "Tabelle 3"
+    )
+    assert placeholder["source_xml_unavailable_table"] is True
+    assert "Kombination von Druckübertragungsstempeln" in placeholder["text"]
+    assert "Tabelle nicht darstellbar" in placeholder["text"]
+    assert not any(issue["severity"] == "error" for issue in issues)
+
+
+def test_real_ogewv_uses_numbered_cals_titles_without_text_cues():
+    corpus_document = (
+        Path(__file__).resolve().parents[2]
+        / "gesetze_im_internet_xml"
+        / "documents"
+        / "ogewv_2016-6962b7a776ab"
+    )
+    packages = sorted(corpus_document.glob("*/source.xml.zip"))
+    if not packages:
+        pytest.skip("downloaded OGewV XML package is not available")
+
+    document, issues = extract_document_from_xml(packages[-1])
+
+    annex_8 = next(
+        unit
+        for unit in document["structural_units"]
+        if unit["legal_citation"] == "OGewV Anlage 8"
+    )
+    annex_8_tables = [
+        unit
+        for unit in document["structural_units"]
+        if unit.get("parent_unit_id") == annex_8["unit_id"]
+        and unit.get("unit_type") == "table"
+    ]
+    assert [
+        (table["label"], table["title"])
+        for table in annex_8_tables
+    ] == [
+        ("Tabelle 1", "Stoffe des chemischen Zustands"),
+        ("Tabelle 2", "Umweltqualitätsnormen"),
+    ]
+
+    annex_12 = next(
+        unit
+        for unit in document["structural_units"]
+        if unit["legal_citation"] == "OGewV Anlage 12"
+    )
+    annex_12_tables = [
+        unit
+        for unit in document["structural_units"]
+        if unit.get("parent_unit_id") == annex_12["unit_id"]
+        and unit.get("unit_type") == "table"
+    ]
+    assert [table["label"] for table in annex_12_tables] == [
+        "Tabelle 1",
+        "Tabelle 2",
+        "Tabelle 3",
+    ]
+    assert not any(issue["severity"] == "error" for issue in issues)
+
+
 def test_top_level_payload_is_deterministic(tmp_path):
     source = write_xml(tmp_path)
     first = extract_package(source, {"title": "Test source"})
     second = extract_package(source, {"title": "Test source"})
     assert first == second
     assert first["schema_version"] == "1.0.0-draft"
+    assert first["extractor"] == {
+        "name": "gii_xml",
+        "version": GII_XML_EXTRACTOR_VERSION,
+    }
+    assert (
+        first["documents"][0]["metadata"]["gii_xml_extractor_version"]
+        == GII_XML_EXTRACTOR_VERSION
+    )
     assert first["documents"][0]["page_refs"] == []
     json.dumps(first, ensure_ascii=False)
+
+
+def test_technical_node_ids_are_document_scoped_without_changing_semantic_keys(
+    tmp_path,
+):
+    first_path = tmp_path / "first.xml"
+    second_path = tmp_path / "second.xml"
+    first_path.write_text(XML_SAMPLE, encoding="utf-8")
+    second_path.write_text(
+        XML_SAMPLE.replace("BJNRTEST", "BJNRTESTTWO"),
+        encoding="utf-8",
+    )
+
+    first, _first_issues = extract_document_from_xml(first_path)
+    second, _second_issues = extract_document_from_xml(second_path)
+    first_paragraph = next(
+        unit for unit in first["structural_units"] if unit["label"] == "§ 1"
+    )
+    second_paragraph = next(
+        unit for unit in second["structural_units"] if unit["label"] == "§ 1"
+    )
+    first_chunk = next(
+        chunk
+        for chunk in first["chunks"]
+        if chunk["unit_id"] == first_paragraph["unit_id"]
+    )
+    second_chunk = next(
+        chunk
+        for chunk in second["chunks"]
+        if chunk["unit_id"] == second_paragraph["unit_id"]
+    )
+
+    assert first["document_global_key"] == second["document_global_key"]
+    assert first_paragraph["global_key"] == second_paragraph["global_key"]
+    assert first_chunk["global_key"] == second_chunk["global_key"]
+    assert first_paragraph["unit_id"] != second_paragraph["unit_id"]
+    assert first_chunk["chunk_id"] != second_chunk["chunk_id"]
+    assert first_paragraph["unit_id"] == "unit_{}__{}".format(
+        first_paragraph["global_key"],
+        first["document_id"],
+    )
+    assert first_chunk["chunk_id"] == "chunk_{}__{}".format(
+        first_chunk["global_key"],
+        first["document_id"],
+    )
+    article = next(
+        unit for unit in first["structural_units"] if unit["label"] == "Art 232"
+    )
+    assert first_paragraph["parent_unit_id"] == article["unit_id"]
+    assert first_paragraph["unit_id"] in article["child_unit_ids"]
 
 
 def test_zip_reader_records_assets_without_extracting(tmp_path):
@@ -251,6 +482,259 @@ def test_adapter_resolves_footnotes_and_keeps_list_and_preformatted_structure(
     )
 
 
+def test_markerless_footnote_ids_are_visible_only_as_explicit_provenance(tmp_path):
+    internal_id = "F789197_02_BJNR148310010BJNE000202128"
+    source = """<dokumente doknr="BJNRMARKERLESS">
+      <norm doknr="BJNRMARKERLESS"><metadaten>
+        <jurabk>MarkerG</jurabk><amtabk>MarkerG</amtabk>
+        <langue>Markerloses Fußnotengesetz</langue>
+      </metadaten></norm>
+      <norm doknr="BJNRMARKERLESSP1"><metadaten>
+        <jurabk>MarkerG</jurabk><enbez>§ 1</enbez>
+      </metadaten><textdaten><text><Content>
+        <P>Eine Norm<FnR ID="{internal_id}"/> mit Hinweis.</P>
+      </Content><Footnotes>
+        <Footnote Group="column" ID="{internal_id}" Pos="exp">
+          Amtlicher Hinweis ohne sichtbare Nummer.
+        </Footnote>
+      </Footnotes></text></textdaten></norm>
+    </dokumente>""".format(internal_id=internal_id)
+
+    document, issues = extract_document_from_xml(write_xml(tmp_path, source))
+    main_chunk = next(
+        chunk
+        for chunk in document["chunks"]
+        if chunk["chunk_type"] == "provision_text"
+    )
+    footnote = next(
+        chunk
+        for chunk in document["chunks"]
+        if chunk["chunk_type"] == "footnote"
+    )
+
+    assert main_chunk["text"] == "Eine Norm[Fußnote 1] mit Hinweis."
+    assert internal_id not in main_chunk["text"]
+    assert footnote["label"] == "Fußnote 1"
+    assert internal_id not in footnote["global_key"]
+    assert internal_id not in footnote["chunk_id"]
+    assert footnote["source_xml_footnote_id"] == internal_id
+    assert not any(
+        issue["issue_type"] in {
+            "xml_missing_footnote_definition",
+            "xml_orphan_footnote_definition",
+        }
+        for issue in issues
+    )
+
+
+def test_table_footnote_markers_rekey_rows_and_table_note_sequences(tmp_path):
+    internal_id = "F817098_02_01_01_02_BJNR271600021BJNE003000000"
+    source = """<dokumente doknr="BJNRTABLEFOOT">
+      <norm doknr="BJNRTABLEFOOT"><metadaten>
+        <jurabk>TableFootV</jurabk><amtabk>TableFootV</amtabk>
+        <langue>Tabellenfußnotenverordnung</langue>
+      </metadaten></norm>
+      <norm doknr="BJNRTABLEFOOTA1"><metadaten>
+        <jurabk>TableFootV</jurabk><enbez>Anlage 1</enbez>
+      </metadaten><textdaten><text><Content>
+        <P>Tabelle 1:</P>
+        <table><tgroup cols="2">
+          <thead><row>
+            <entry>Stoff</entry>
+            <entry>Vorsorgewert<FnR ID="{internal_id}"/></entry>
+          </row></thead>
+          <tbody><row><entry>Arsen</entry><entry>10</entry></row></tbody>
+        </tgroup></table>
+      </Content><Footnotes>
+        <Footnote ID="{internal_id}" FnZ="2">Tabellenhinweis.</Footnote>
+      </Footnotes></text></textdaten></norm>
+    </dokumente>""".format(internal_id=internal_id)
+
+    document, issues = extract_document_from_xml(write_xml(tmp_path, source))
+    table = next(
+        unit
+        for unit in document["structural_units"]
+        if unit["unit_type"] == "table"
+    )
+    table_chunks = [
+        chunk for chunk in document["chunks"] if chunk["unit_id"] == table["unit_id"]
+    ]
+    rows_chunk = next(
+        chunk for chunk in table_chunks if chunk["chunk_type"] == "table_rows"
+    )
+    note_chunk = next(
+        chunk for chunk in table_chunks if chunk["chunk_type"] == "table_note"
+    )
+
+    assert table["columns"] == ["Stoff", "Vorsorgewert[2]"]
+    assert table["table_data"]["rows"] == [
+        {"Stoff": "Arsen", "Vorsorgewert[2]": "10"}
+    ]
+    assert rows_chunk["rows"] == table["table_data"]["rows"]
+    assert set(rows_chunk["rows"][0]) == set(rows_chunk["columns"])
+    assert internal_id not in json.dumps(
+        table["table_data"],
+        ensure_ascii=False,
+        default=str,
+    )
+    assert table["source_xml_footnote_ids"] == [internal_id]
+    assert [chunk["sequence"] for chunk in table_chunks] == [1, 2]
+    assert rows_chunk["source_order"] == [1, 1, 0]
+    assert note_chunk["source_order"] == [1, 1, 1]
+    assert not any(issue["severity"] == "error" for issue in issues)
+
+
+def test_shared_prose_and_table_footnote_keeps_provision_context(tmp_path):
+    shared_id = "fn-shared"
+    table_only_id = "fn-table-only"
+    source = """<dokumente doknr="BJNRSHARED">
+      <norm doknr="BJNRSHARED"><metadaten>
+        <jurabk>SharedV</jurabk><amtabk>SharedV</amtabk>
+        <langue>Geteilte Fußnotenverordnung</langue>
+      </metadaten></norm>
+      <norm doknr="BJNRSHAREDA1"><metadaten>
+        <jurabk>SharedV</jurabk><enbez>Anlage 1</enbez>
+      </metadaten><textdaten><text><Content>
+        <P>Der Hinweis gilt im Fließtext<FnR ID="{shared_id}"/>.</P>
+        <table><Title>Tabelle 1: Messwerte</Title><tgroup cols="2">
+          <thead><row>
+            <entry>Wert<FnR ID="{shared_id}"/></entry>
+            <entry>Grenze<FnR ID="{table_only_id}"/></entry>
+          </row></thead>
+          <tbody><row><entry>1</entry><entry>2</entry></row></tbody>
+        </tgroup></table>
+      </Content><Footnotes>
+        <Footnote ID="{shared_id}" FnZ="1">Gemeinsamer Hinweis.</Footnote>
+        <Footnote ID="{table_only_id}" FnZ="2">Nur Tabellenhinweis.</Footnote>
+      </Footnotes></text></textdaten></norm>
+    </dokumente>""".format(
+        shared_id=shared_id,
+        table_only_id=table_only_id,
+    )
+
+    document, issues = extract_document_from_xml(write_xml(tmp_path, source))
+
+    annex = next(
+        unit
+        for unit in document["structural_units"]
+        if unit["legal_citation"] == "SharedV Anlage 1"
+    )
+    table = next(
+        unit
+        for unit in document["structural_units"]
+        if unit["unit_type"] == "table"
+    )
+    shared_note = next(
+        chunk
+        for chunk in document["chunks"]
+        if chunk.get("source_xml_footnote_id") == shared_id
+    )
+    table_note = next(
+        chunk
+        for chunk in document["chunks"]
+        if chunk.get("source_xml_footnote_id") == table_only_id
+    )
+
+    assert shared_note["chunk_type"] == "footnote"
+    assert shared_note["unit_id"] == annex["unit_id"]
+    assert shared_note["legal_citation"] == "SharedV Anlage 1"
+    assert shared_note["source_xml_referenced_outside_tables"] is True
+    assert shared_note["source_xml_table_contexts"] == [
+        {
+            "unit_id": table["unit_id"],
+            "legal_citation": "SharedV Anlage 1 Tabelle 1",
+            "table_index": 1,
+        }
+    ]
+    assert table_note["chunk_type"] == "table_note"
+    assert table_note["unit_id"] == table["unit_id"]
+    assert table_note["source_xml_referenced_outside_tables"] is False
+    assert not any(issue["severity"] == "error" for issue in issues)
+
+
+def test_real_ogewv_anlage_5_keeps_shared_footnote_under_annex():
+    corpus_document = (
+        Path(__file__).resolve().parents[2]
+        / "gesetze_im_internet_xml"
+        / "documents"
+        / "ogewv_2016-6962b7a776ab"
+    )
+    packages = sorted(corpus_document.glob("*/source.xml.zip"))
+    if not packages:
+        pytest.skip("downloaded OGewV XML package is not available")
+
+    document, issues = extract_document_from_xml(packages[-1])
+
+    annex = next(
+        unit
+        for unit in document["structural_units"]
+        if unit["legal_citation"] == "OGewV Anlage 5"
+    )
+    shared_note = next(
+        chunk
+        for chunk in document["chunks"]
+        if chunk.get("source_xml_footnote_id")
+        == "f793919_08_BJNR137310016BJNE002200000"
+    )
+    table_only_note = next(
+        chunk
+        for chunk in document["chunks"]
+        if chunk.get("source_xml_footnote_id")
+        == "f793919_11_BJNR137310016BJNE002200000"
+    )
+
+    assert shared_note["chunk_type"] == "footnote"
+    assert shared_note["unit_id"] == annex["unit_id"]
+    assert shared_note["legal_citation"] == "OGewV Anlage 5"
+    assert shared_note["source_xml_referenced_outside_tables"] is True
+    assert len(shared_note["source_xml_table_contexts"]) == 1
+    assert shared_note["source_xml_table_contexts"][0]["legal_citation"].startswith(
+        "OGewV Anlage 5 "
+    )
+    assert table_only_note["chunk_type"] == "table_note"
+    assert table_only_note["source_xml_referenced_outside_tables"] is False
+    assert table_only_note["unit_id"] != annex["unit_id"]
+    assert not any(issue["severity"] == "error" for issue in issues)
+
+
+def test_metadata_only_official_xml_emits_explicit_fallback_unit(tmp_path):
+    source = """<dokumente builddate="20260506175142" doknr="BJNRMETA">
+      <norm builddate="20260506175142" doknr="BJNRMETA">
+        <metadaten>
+          <jurabk>MetaBek</jurabk><amtabk>MetaBek</amtabk>
+          <ausfertigung-datum manuell="ja">2010-04-29</ausfertigung-datum>
+          <fundstelle typ="amtlich">
+            <periodikum>BGBl I</periodikum><zitstelle>2010, 534</zitstelle>
+          </fundstelle>
+          <langue>Bekanntmachung ohne veröffentlichten Normtext</langue>
+        </metadaten>
+        <textdaten><text format="decorated"/></textdaten>
+      </norm>
+    </dokumente>"""
+
+    document, issues = extract_document_from_xml(write_xml(tmp_path, source))
+
+    assert document["metadata"]["xml_metadata_only"] is True
+    assert document["metadata"]["xml_unit_count"] == 1
+    assert document["metadata"]["xml_chunk_count"] == 1
+    unit = document["structural_units"][0]
+    chunk = document["chunks"][0]
+    assert unit["unit_type"] == "document_note"
+    assert unit["label"] == "Dokumentmetadaten"
+    assert unit["source_xml_fallback_reason"] == "metadata_only_document"
+    assert chunk["chunk_type"] == "document_note"
+    assert chunk["unit_id"] == unit["unit_id"]
+    assert "Bekanntmachung ohne veröffentlichten Normtext" in chunk["text"]
+    assert "Ausfertigungsdatum: 2010-04-29" in chunk["text"]
+    assert "Amtliche Fundstelle: BGBl I 2010, 534" in chunk["text"]
+    assert any(
+        issue["issue_type"] == "xml_metadata_only_document"
+        and issue["severity"] == "warning"
+        for issue in issues
+    )
+    assert not any(issue["severity"] == "error" for issue in issues)
+
+
 def test_adapter_reports_missing_assets_and_uses_retrieval_placeholder(tmp_path):
     source = """<dokumente doknr="BJNRIMG">
       <norm doknr="BJNRIMG"><metadaten>
@@ -272,6 +756,34 @@ def test_adapter_reports_missing_assets_and_uses_retrieval_placeholder(tmp_path)
     assert any(issue["issue_type"] == "xml_missing_asset" for issue in issues)
 
 
+def test_adapter_uses_filename_for_available_asset_with_whitespace_alt(tmp_path):
+    source = """<dokumente doknr="BJNRIMG">
+      <norm doknr="BJNRIMG"><metadaten>
+        <jurabk>ImgG</jurabk><amtabk>ImgG</amtabk><langue>Bildgesetz</langue>
+      </metadaten></norm>
+      <norm doknr="BJNRIMGP1"><metadaten>
+        <jurabk>ImgG</jurabk><enbez>§ 1</enbez>
+      </metadaten><textdaten><text><Content>
+        <P><IMG SRC="diagram.jpg" alt="  "/></P>
+      </Content></text></textdaten></norm>
+    </dokumente>"""
+    package = tmp_path / "sample.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("sample.xml", source)
+        archive.writestr("diagram.jpg", b"binary-image")
+
+    document, issues = extract_document_from_xml(package)
+
+    asset = next(
+        chunk for chunk in document["chunks"] if chunk["chunk_type"] == "source_asset"
+    )
+    assert asset["text"] == "[Bild: diagram.jpg]"
+    assert asset["source_asset_status"] == "available"
+    assert asset["source_asset_sha256"]
+    assert document["metadata"]["source_assets"][0]["title"] == ""
+    assert not issues
+
+
 def test_adapter_rejects_inline_entity_declarations(tmp_path):
     source = """<!DOCTYPE dokumente [
       <!ENTITY x "expanded">
@@ -280,4 +792,47 @@ def test_adapter_rejects_inline_entity_declarations(tmp_path):
       <jurabk>&x;</jurabk>
     </metadaten></norm></dokumente>"""
     with pytest.raises(ValueError, match="entity declarations"):
+        extract_document_from_xml(write_xml(tmp_path, source))
+
+
+def test_adapter_rejects_utf16_entity_declaration_before_expansion(tmp_path):
+    source = """<?xml version="1.0" encoding="UTF-16"?>
+    <!DOCTYPE dokumente [
+      <!ENTITY secret SYSTEM "file:///definitely-not-readable">
+    ]>
+    <dokumente doknr="BJNRXXE"><norm><metadaten>
+      <jurabk>&secret;</jurabk>
+    </metadaten></norm></dokumente>"""
+    path = tmp_path / "utf16.xml"
+    path.write_bytes(source.encode("utf-16"))
+
+    with pytest.raises(ValueError, match="DTD/entity declarations"):
+        extract_document_from_xml(path)
+
+
+def test_adapter_allows_inert_official_external_doctype_without_loading_it(
+    tmp_path,
+):
+    source = """<?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE dokumente SYSTEM "gii-norm.dtd">
+    <dokumente doknr="BJNRDTD">
+      <norm doknr="BJNRDTD"><metadaten>
+        <jurabk>DTDTestG</jurabk>
+        <langue>Gesetz mit offizieller DTD-Referenz</langue>
+      </metadaten></norm>
+    </dokumente>"""
+
+    document, issues = extract_document_from_xml(write_xml(tmp_path, source))
+
+    assert document["canonical_citation"] == "DTDTestG"
+    assert not any(issue["severity"] == "error" for issue in issues)
+
+
+def test_adapter_rejects_doctype_without_entity_declarations(tmp_path):
+    source = """<!DOCTYPE dokumente>
+    <dokumente doknr="BJNRDTD"><norm><metadaten>
+      <jurabk>DTD</jurabk>
+    </metadaten></norm></dokumente>"""
+
+    with pytest.raises(ValueError, match="DTD/entity declarations"):
         extract_document_from_xml(write_xml(tmp_path, source))
