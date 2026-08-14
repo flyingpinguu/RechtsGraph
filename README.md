@@ -133,11 +133,14 @@ in einem anderen Rechtsakt.
 ## Repository
 
 ```text
-pdf-neo4j-pipeline/
-├── normtext_extractor/   # Parser und gemeinsames Datenmodell
-├── scripts/              # Download-, Batch-, Audit- und Export-Workflows
-├── tests/                # Unit-, Integrations- und Regressionstests
-└── requirements.txt
+RechtsGraph/
+├── pdf-neo4j-pipeline/
+│   ├── normtext_extractor/   # Parser und gemeinsames Datenmodell
+│   ├── scripts/              # Download-, Batch-, Audit- und Export-Workflows
+│   ├── tests/                # Unit-, Integrations- und Regressionstests
+│   └── requirements.txt
+├── gesetze_im_internet_pdfs/ # Platzhalter für den lokalen GII-PDF-Korpus
+└── eurlex_consolidated_de/   # Platzhalter für lokale Cellar-Downloads
 ```
 
 Die wichtigsten Bausteine sind:
@@ -166,7 +169,9 @@ python3 -m venv .venv
 
 Die Batch-Skripte unter `scripts/` führen anschließend durch Download,
 Normalisierung, Audit, Referenzauflösung und Neo4j-Export. Quelldaten und
-generierte Korpora bleiben bewusst außerhalb der Versionsverwaltung.
+generierte Korpora bleiben bewusst außerhalb der Versionsverwaltung; die
+erwarteten lokalen Quellverzeichnisse sind im Repository als Platzhalter
+angelegt.
 
 ## Tech Stack
 

@@ -21,9 +21,11 @@ pdf-neo4j-pipeline/output/
 pdf-neo4j-pipeline/tmp/
 
 # Downloaded source corpora and resumable extraction artifacts
-gesetze_im_internet_pdfs/
+gesetze_im_internet_pdfs/*
+!gesetze_im_internet_pdfs/.gitkeep
 gesetze_im_internet_xml/
-eurlex_consolidated_de/
+eurlex_consolidated_de/*
+!eurlex_consolidated_de/.gitkeep
 LEG_DE_FMX_*.zip
 
 # Local editor/OS noise
