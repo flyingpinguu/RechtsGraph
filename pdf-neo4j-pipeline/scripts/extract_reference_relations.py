@@ -26,27 +26,128 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 SCHEMA_VERSION = "0.1.0"
 HSPACE = r"[^\S\r\n]"
-QUALIFIER_PATTERN = r"(?:Abs\.|Absatz|Satz|Nummern?|Nr\.|Buchstabe|Buchst\.)"
+QUALIFIER_PATTERN = (
+    r"(?:Abs\.|Absatz|Unterabsatz|Unterabs\.|Satz|Halbsatz|"
+    r"Nummern?|Nr\.|Ziffer|Buchstabe|Buchst\.)"
+)
 PARA_BODY_PATTERN = (
     r"\d+[a-z]?"
-    rf"(?:\s*(?:{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+|"
-    rf"(?:und|oder|sowie|,|-|bis)\s*(?:{QUALIFIER_PATTERN}\s*[A-Za-z0-9]+|\d+[a-z]?))){{0,30}}"
+    rf"(?:{HSPACE}*(?:{QUALIFIER_PATTERN}{HSPACE}*[A-Za-z0-9]+|"
+    rf"(?:erster|zweiter){HSPACE}+Halbsatz|"
+    rf"(?:und|oder|sowie|,|-|bis){HSPACE}*(?:{QUALIFIER_PATTERN}{HSPACE}*[A-Za-z0-9]+|"
+    rf"\d+[a-z]?|[a-z]\b))){{0,30}}"
 )
 LAW_NAME_PATTERN = r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß0-9\-–\s]{3,100}?"
+LAW_TITLE_SUFFIX_PATTERN = (
+    r"(?:[Gg]esetzbuch(?:es|s)|[Gg]esetzes|[Vv]erordnung|"
+    r"[Oo]rdnung|[Vv]ertrages)\b"
+)
+LAW_LEADING_MODIFIER_PATTERN = (
+    r"(?:(?:bis\s+zum\s+\d{1,2}\.\s+[A-Za-zÄÖÜäöüß]+\s+\d{4}\s+"
+    r"|damals\s+|jeweils\s+)?geltenden\s+)?"
+)
+GENERIC_LAW_NAME_PATTERN = (
+    r"(?:Gesetzes|Gesetzbuchs|Gesetzbuches|Verordnung|Ordnung)"
+    r"\s+(?:über|gegen|zur|zum|für|zur\s+Durchführung)\s+"
+    r"[A-Za-zÄÖÜäöüß0-9\-–,()/\s]{3,180}?"
+)
+GENERIC_LAW_END_PATTERN = (
+    r"(?="
+    r"\s+(?:vom\s+\d|in\s+der\s+(?:jeweils\s+)?geltenden\s+Fassung|"
+    r"sowie\s+(?:die|der|den)\s+§|und\s+(?:die|der|den)\s+§)"
+    r"|\s+sowie\s+gegebenenfalls\b"
+    r"|\s+sowie\s+(?:die|der|den|das)\s+[A-ZÄÖÜ]"
+    r"|\s+sowie\s+[a-z]\)"
+    r"|\s+(?:genannten|festgelegten|geregelten|vorgesehenen|bestimmten|bezeichneten)\b"
+    r"|\s+(?:ist|sind|wird|werden|wurde|wurden|gilt|gelten|forscht|"
+    r"gerichtlich|entsprechend|genanntes?|vergleichbare|maßgeblich|massgeblich)\b"
+    r"|\s+an\s+(?:die|der|den|das)\b"
+    r"|\s+oder\s+entsprechenden\b"
+    r"|\s+in\s+der\s+Fassung\b"
+    r"|\s+im\s+Planfeststellungsbeschluss\b"
+    r"|\s+in\s+(?:Spalte|Nummer|Teil|Abschnitt)\b"
+    r"|\s+\("
+    r"|,\s*\d+[a-z]?\."
+    r"|,\s*[a-z]\)"
+    r"|,\s+(?:die|der|das|zuletzt|in\s+der)"
+    r"|[;.]|$)"
+)
 
 PARA_EXTERNAL_LONG_RE = re.compile(
     rf"(?P<mention>§{{1,2}}\s*(?P<body>{PARA_BODY_PATTERN})"
-    rf"(?:\s+(?P<article>des|der))?\s+(?P<law>{LAW_NAME_PATTERN}"
-    r"(?:gesetzes|verordnung|ordnung|gesetzbuches)))"
+    rf"\s+(?P<article>des|der)\s+{LAW_LEADING_MODIFIER_PATTERN}(?P<law>{LAW_NAME_PATTERN}"
+    rf"{LAW_TITLE_SUFFIX_PATTERN}))"
+)
+PARA_EXTERNAL_GENERIC_RE = re.compile(
+    rf"(?P<mention>§{{1,2}}\s*(?P<body>{PARA_BODY_PATTERN})"
+    rf"\s+(?P<article>des|der)\s+(?P<law>{GENERIC_LAW_NAME_PATTERN})"
+    rf"{GENERIC_LAW_END_PATTERN})"
 )
 ARTICLE_EXTERNAL_LONG_RE = re.compile(
     rf"(?P<mention>Artikel\s+(?P<body>{PARA_BODY_PATTERN})"
-    rf"\s+(?P<article>des|der)\s+(?P<law>{LAW_NAME_PATTERN}"
-    r"(?:gesetzes|verordnung|ordnung|gesetzbuches)))"
+    rf"\s+(?P<article>des|der)\s+{LAW_LEADING_MODIFIER_PATTERN}(?P<law>{LAW_NAME_PATTERN}"
+    rf"{LAW_TITLE_SUFFIX_PATTERN}))"
+)
+ARTICLE_PARA_EXTERNAL_LONG_RE = re.compile(
+    rf"(?P<mention>Artikel\s+(?P<article_body>{PARA_BODY_PATTERN})\s+"
+    rf"§{{1,2}}\s*(?P<para_body>{PARA_BODY_PATTERN})"
+    rf"\s+(?:des|der)\s+(?P<law>{LAW_NAME_PATTERN}"
+    rf"{LAW_TITLE_SUFFIX_PATTERN}))"
+)
+ARTICLE_EXTERNAL_GENERIC_RE = re.compile(
+    rf"(?P<mention>Artikel\s+(?P<body>{PARA_BODY_PATTERN})"
+    rf"\s+(?P<article>des|der)\s+(?P<law>{GENERIC_LAW_NAME_PATTERN})"
+    rf"{GENERIC_LAW_END_PATTERN})"
+)
+INTERNAL_ARTICLE_RE = re.compile(
+    rf"(?P<mention>\bArtikel\s+(?P<body>{PARA_BODY_PATTERN}))"
+)
+EU_ACT_IDENTIFIER_PATTERN = (
+    r"(?:\((?:EG|EU|EWG|EAG)\)\s*(?:Nr\.\s*)?)?"
+    r"\d{2,4}/\d{1,4}(?:/(?:EG|EU|EWG|EAG))?"
+)
+EU_ACT_TYPE_PATTERN = (
+    r"(?:Delegierte(?:n)?\s+Verordnung|Durchführungsverordnung|"
+    r"Durchfuehrungsverordnung|Verordnung|Richtlinie|Beschluss)"
+)
+EU_ACT_RE = re.compile(
+    rf"\b(?P<act_type>{EU_ACT_TYPE_PATTERN})\s+"
+    rf"(?P<identifier>{EU_ACT_IDENTIFIER_PATTERN})"
+)
+GOVERNING_EU_ACT_RE = re.compile(
+    rf"\bgegen\s+(?:die\s+)?"
+    rf"(?P<act_type>{EU_ACT_TYPE_PATTERN})\s+"
+    rf"(?P<identifier>{EU_ACT_IDENTIFIER_PATTERN})"
+    r".{0,1400}?\bverstößt\b",
+    flags=re.DOTALL,
+)
+ARTICLE_EXTERNAL_EU_RE = re.compile(
+    rf"(?P<mention>\bArtikel\s+(?P<body>{PARA_BODY_PATTERN})"
+    rf"\s*,?\s+(?:des|der)\s+(?P<act_type>{EU_ACT_TYPE_PATTERN})\s+"
+    rf"(?P<identifier>{EU_ACT_IDENTIFIER_PATTERN}))"
+)
+ARTICLE_EXTERNAL_DATED_ACT_RE = re.compile(
+    rf"(?P<mention>\bArtikel\s+(?P<body>{PARA_BODY_PATTERN})"
+    r"\s+(?:des|der)\s+(?P<act_type>Gesetzes|Verordnung)\s+vom\s+"
+    r"(?P<date>\d{1,2}\.\s+[A-Za-zÄÖÜäöüß]+\s+\d{4}))"
+)
+ARTICLE_EXTERNAL_FRAMEWORK_RE = re.compile(
+    rf"(?P<mention>\bArtikel\s+(?P<body>{PARA_BODY_PATTERN})"
+    r"\s+(?:des|der)\s+(?P<act_type>Rahmenbeschlusses|Rahmenbeschluss)\s+"
+    r"(?P<identifier>\d{4}/\d+/(?:JI|JAI)))"
+)
+ARTICLE_EXTERNAL_DATED_INSTRUMENT_RE = re.compile(
+    rf"(?P<mention>\bArtikel\s+(?P<body>{PARA_BODY_PATTERN})"
+    r"\s+(?:des|der)\s+(?P<act_type>Übereinkommens|Uebereinkommens)\s+vom\s+"
+    r"(?P<date>\d{1,2}\.\s+[A-Za-zÄÖÜäöüß]+\s+\d{4}))"
 )
 PARA_EXTERNAL_ABBREV_RE = re.compile(
     rf"(?P<mention>§{{1,2}}\s*(?P<body>{PARA_BODY_PATTERN})"
-    r"\s+(?P<abbr>[A-ZÄÖÜ][A-Za-zÄÖÜa-zäöüß0-9]{1,20}(?:G|V|GB|BGB|StGB|VZO))\b)"
+    r"\s+(?P<abbr>[A-ZÄÖÜ][A-Za-zÄÖÜa-zäöüß0-9]{1,20}(?:G|V|O|GB|BGB|StGB|VZO))\b)"
+)
+ARTICLE_EXTERNAL_ABBREV_RE = re.compile(
+    rf"(?P<mention>\b(?:Artikel|Art\.)\s+(?P<body>{PARA_BODY_PATTERN})"
+    r"\s+(?P<abbr>[A-ZÄÖÜ][A-Za-zÄÖÜa-zäöüß0-9]{1,20}(?:G|V|O|GB|BGB|StGB|VZO))\b)"
 )
 INTERNAL_PARA_RE = re.compile(
     rf"(?P<mention>§{{1,2}}\s*(?P<body>{PARA_BODY_PATTERN}))"
@@ -61,12 +162,75 @@ INTERNAL_ANNEX_RE = re.compile(
     rf"(?:\s+Tabelle\s+(?P<table_body>\d+[a-z]?"
     rf"(?:{HSPACE}*(?:und|oder|,|-|bis){HSPACE}*(?:Tabelle{HSPACE}+)?\d+[a-z]?)*))?)"
 )
+ANNEX_DETAIL_PATTERN = (
+    r"(?:\s+(?:Nummern?|Nr\.|Teil|Abschnitt|Spalten?)\s+"
+    r"\d+(?:\.\d+)*(?:[a-z])?"
+    r"(?:\s*(?:und|oder|bis|,)\s*\d+(?:\.\d+)*(?:[a-z])?)?)*"
+)
+ANNEX_EXTERNAL_ABBREV_RE = re.compile(
+    rf"(?P<mention>\b(?P<annex_kind>Anlagen?|Anhang|Anhänge|Anhaenge)\s+"
+    rf"(?P<body>\d+[a-z]?)"
+    rf"(?:\s+Tabelle\s+(?P<table_body>\d+[a-z]?))?"
+    rf"{ANNEX_DETAIL_PATTERN}"
+    r"\s+(?P<abbr>[A-ZÄÖÜ][A-Za-zÄÖÜa-zäöüß0-9]{1,20}(?:G|V|O|GB|BGB|StGB|VZO))\b)"
+)
+ANNEX_EXTERNAL_LONG_RE = re.compile(
+    rf"(?P<mention>\b(?P<annex_kind>Anlagen?|Anhang|Anhänge|Anhaenge)\s+"
+    rf"(?P<body>\d+[a-z]?)"
+    rf"(?:\s+Tabelle\s+(?P<table_body>\d+[a-z]?))?"
+    rf"{ANNEX_DETAIL_PATTERN}"
+    rf"\s+(?P<article>des|der)\s+(?P<law>{LAW_NAME_PATTERN}"
+    rf"{LAW_TITLE_SUFFIX_PATTERN}))"
+)
+ANNEX_EXTERNAL_GENERIC_RE = re.compile(
+    rf"(?P<mention>\b(?P<annex_kind>Anlagen?|Anhang|Anhänge|Anhaenge)\s+"
+    rf"(?P<body>\d+[a-z]?)"
+    rf"(?:\s+Tabelle\s+(?P<table_body>\d+[a-z]?))?"
+    rf"{ANNEX_DETAIL_PATTERN}"
+    rf"\s+(?P<article>des|der)\s+(?P<law>{GENERIC_LAW_NAME_PATTERN})"
+    rf"{GENERIC_LAW_END_PATTERN})"
+)
+
+CONTEXT_LAW_NAME_PATTERN = (
+    rf"(?:{LAW_NAME_PATTERN}"
+    r"(?:[Gg]esetz|[Vv]erordnung|[Oo]rdnung|[Gg]esetzbuch)"
+    r"|(?:Gesetz|Verordnung|Ordnung)"
+    r"\s+(?:über|gegen|zur|zum|für|zur\s+Durchführung)\s+"
+    r"[A-Za-zÄÖÜäöüß0-9\-–,()/\s]{3,180}?)"
+)
+LAW_SECTION_CONTEXT_RE = re.compile(
+    rf"\b(?:aus|nach)\s+(?:dem|der)\s+"
+    rf"(?P<law>{CONTEXT_LAW_NAME_PATTERN})\s*:"
+)
+LAW_FORWARD_SCOPE_RE = re.compile(
+    rf"\b(?:das|dem|der)\s+(?P<law>{CONTEXT_LAW_NAME_PATTERN})\s*,?\s+"
+    r"mit\s+Ausnahme\s+(?:von|der)\s+"
+)
+LIST_ITEM_HEADING_RE = re.compile(r"(?m)^\s*\d+[a-z]?\.\s+")
+
+EXTERNAL_SCOPE_BRIDGE_RE = re.compile(
+    r"^\s*(?:"
+    r"[,–-]\s*|"
+    r"(?:des|der|die|den)\s*|"
+    r"(?:und|oder|sowie)(?:\s+(?:des|der|die|den))?(?:\s+nach)?\s*|"
+    r"(?:jeweils\s+)?(?:auch\s+)?in\s+Verbindung\s+mit\s*|"
+    r"(?:und|oder)?\s*(?:die|eine|einer|ein)\s+"
+    r"(?:Genehmigung|Anordnung|Zulassung(?:\s+vorzeitigen\s+Beginns)?|"
+    r"Vorbescheid|Plangenehmigung|Planfeststellung)\s+nach\s*|"
+    r"von\s+der\s+Erlaubnispflicht\s+nach\s*"
+    r")*$",
+    re.IGNORECASE,
+)
 
 QUALIFIER_RE = re.compile(
-    r"\b(?P<kind>Abs\.|Absatz\b|Satz\b|Nummern?\b|Nr\.|Buchstabe\b|Buchst\.)\s*(?P<num>[A-Za-z0-9]+)"
+    r"\b(?P<kind>Abs\.|Absatz\b|Unterabsatz\b|Unterabs\.|Satz\b|Halbsatz\b|"
+    r"Nummern?\b|Nr\.|Ziffer\b|Buchstabe\b|Buchst\.)\s*(?P<num>[A-Za-z0-9]+)"
 )
 ABS_QUALIFIER_RE = re.compile(r"\b(?:Abs\.|Absatz)\s*(?P<num>\d+[a-z]?)\b")
-LOWER_THAN_ABS_RE = re.compile(r"\b(?:Satz|Nummern?|Nr\.|Buchstabe|Buchst\.)\b")
+LOWER_THAN_ABS_RE = re.compile(
+    r"\b(?:Unterabsatz|Unterabs\.|Satz|Halbsatz|Nummern?|Nr\.|Ziffer|"
+    r"Buchstabe|Buchst\.)\b"
+)
 CONNECTED_NUM_RE = re.compile(
     r"\b(?P<connector>und|oder|sowie|bis)\s*(?:(?:Abs\.|Absatz)\s*)?(?P<num>\d+[a-z]?)\b|"
     r"(?P<comma>,|-)\s*(?:(?:Abs\.|Absatz)\s*)?(?P<comma_num>\d+[a-z]?)\b"
@@ -75,9 +239,16 @@ MULTI_NUM_RE = re.compile(r"\d+[a-z]?")
 
 LAW_GENITIVE_ENDINGS = (
     ("gesetzbuches", "gesetzbuch"),
+    ("gesetzbuchs", "gesetzbuch"),
     ("gesetzes", "gesetz"),
+    ("vertrages", "vertrag"),
     ("verordnung", "verordnung"),
     ("ordnung", "ordnung"),
+)
+LAW_GENITIVE_PREFIXES = (
+    ("gesetzbuches ", "gesetzbuch "),
+    ("gesetzbuchs ", "gesetzbuch "),
+    ("gesetzes ", "gesetz "),
 )
 
 
@@ -115,7 +286,17 @@ def stable_id(prefix: str, *parts: Any) -> str:
 
 def normalize_law_name(law_name: str) -> str:
     cleaned = re.sub(r"\s+", " ", law_name or "").strip()
+    cleaned = re.sub(
+        r"^Bürgerlichen\s+Gesetzbuch",
+        "Bürgerliches Gesetzbuch",
+        cleaned,
+    )
     lower = cleaned.lower()
+    for prefix, replacement in LAW_GENITIVE_PREFIXES:
+        if lower.startswith(prefix):
+            cleaned = replacement + cleaned[len(prefix):]
+            lower = cleaned.lower()
+            break
     for suffix, replacement in LAW_GENITIVE_ENDINGS:
         if lower.endswith(suffix):
             cleaned = cleaned[: -len(suffix)] + replacement
@@ -123,13 +304,68 @@ def normalize_law_name(law_name: str) -> str:
     return slugify(cleaned)
 
 
+def plausible_law_name(law_name: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", law_name or "").strip()
+    lower = cleaned.lower()
+    if not cleaned or len(cleaned.split()) > 18:
+        return False
+    if re.match(r"^artikels?\b", lower):
+        return False
+    clause_markers = (
+        r"\binnerhalb\s+eines?\b",
+        r"\bnach\s+dem\s+inkrafttreten\b",
+        r"\btaeter\s+als\s+amtstraeger\b",
+        r"\bzur\s+mitwirkung\s+bei\s+dem\b",
+        r"\b(?:ist|sind|wird|werden|wurde|wurden|gilt|gelten)\s+"
+        r"(?:anzuwenden|angeordnet|beruecksichtigt|berücksichtigt)\b",
+    )
+    return not any(re.search(pattern, lower) for pattern in clause_markers)
+
+
 def normalize_abbreviation(abbr: str) -> str:
     return slugify(abbr)
+
+
+def eu_act_key(act_type: str, identifier: str) -> str:
+    normalized = (act_type or "").lower()
+    if "verordnung" in normalized:
+        act_type = "Verordnung"
+    elif "richtlinie" in normalized:
+        act_type = "Richtlinie"
+    elif "beschluss" in normalized:
+        act_type = "Beschluss"
+    return slugify("{} {}".format(act_type or "", identifier or ""))
+
+
+def dated_act_key(act_type: str, date_text: str) -> str:
+    normalized_type = {
+        "gesetzes": "gesetz",
+        "verordnung": "verordnung",
+        "übereinkommens": "übereinkommen",
+        "uebereinkommens": "uebereinkommen",
+    }.get((act_type or "").lower(), (act_type or "").lower())
+    return slugify("{} vom {}".format(normalized_type, date_text or ""))
+
+
+def named_act_key(act_type: str, identifier: str) -> str:
+    normalized_type = {
+        "rahmenbeschlusses": "rahmenbeschluss",
+        "rahmenbeschluss": "rahmenbeschluss",
+    }.get((act_type or "").lower(), (act_type or "").lower())
+    return slugify("{} {}".format(normalized_type, identifier or ""))
 
 
 def clean_citation_text(citation: Optional[str]) -> str:
     cleaned = re.sub(r"\s+", " ", citation or "").strip()
     return cleaned.strip('"').strip()
+
+
+def strip_trailing_footnote_markers(value: Optional[str]) -> str:
+    return re.sub(
+        r"(?:\s*\[[^\[\]\r\n]+\])+\s*$",
+        "",
+        value or "",
+    ).strip()
 
 
 def title_aliases_from_citation(citation: Optional[str]) -> Set[str]:
@@ -156,6 +392,35 @@ def title_aliases_from_citation(citation: Optional[str]) -> Set[str]:
             short_title = re.split(r"\s+[–-]\s+", inside, 1)[0].strip()
             if len(short_title) > 3:
                 aliases.add(short_title)
+    return aliases
+
+
+def leading_compound_title_aliases(title: Optional[str]) -> Set[str]:
+    cleaned = clean_citation_text(title)
+    match = re.match(
+        r"^(?P<name>[A-ZÄÖÜ][A-Za-zÄÖÜäöüß-]*"
+        r"(?:gesetz|verordnung|ordnung|gesetzbuch))"
+        r"\s+(?:für|zur|zum|über|gegen)\b",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return {match.group("name")} if match else set()
+
+
+def title_article_aliases(title: Optional[str]) -> Set[str]:
+    """Return title variants that omit the first definite article."""
+    normalized = slugify(strip_trailing_footnote_markers(title))
+    aliases = set()
+    for prefix in (
+        "verordnung_ueber_die_",
+        "verordnung_ueber_das_",
+        "gesetz_ueber_die_",
+        "gesetz_ueber_das_",
+    ):
+        if normalized.startswith(prefix):
+            aliases.add(
+                prefix.rsplit("_", 2)[0] + "_" + normalized[len(prefix):]
+            )
     return aliases
 
 
@@ -237,8 +502,21 @@ def split_para_body(body: str) -> List[str]:
         number, _qualifiers = parse_single_para_body(body)
         return [number] if number else []
     head = re.split(r"\b(?:Abs\.|Absatz|Satz|Nummer|Nr\.|Buchstabe|Buchst\.)\b", body, 1)[0]
-    numbers = MULTI_NUM_RE.findall(head)
-    return numbers or MULTI_NUM_RE.findall(body[:8])
+    matches = list(MULTI_NUM_RE.finditer(head))
+    if not matches:
+        return MULTI_NUM_RE.findall(body[:8])
+    numbers = [matches[0].group(0)]
+    previous = matches[0]
+    for current in matches[1:]:
+        bridge = head[previous.end():current.start()]
+        number = current.group(0)
+        if re.search(r"(?:\bbis\b|[-–])", bridge):
+            for expanded in expand_number_range(previous.group(0), number):
+                append_unique(numbers, expanded)
+        else:
+            append_unique(numbers, number)
+        previous = current
+    return numbers
 
 
 def split_table_body(body: Optional[str]) -> List[str]:
@@ -338,6 +616,15 @@ def global_keys_for_para_body(document_key: str, prefix: str, body: str) -> List
                 for number in subsection_numbers
             )
             return keys
+    if prefix == "art":
+        first_qualifier = QUALIFIER_RE.search(body)
+        article_numbers = split_para_body(
+            body[: first_qualifier.start()] if first_qualifier else body
+        )
+        return [
+            "{}_art_{}".format(document_key, slugify(number))
+            for number in article_numbers
+        ]
     if QUALIFIER_RE.search(body):
         return ["{}_{}_{}".format(document_key, prefix, slugify(para_num))]
     return [
@@ -347,33 +634,53 @@ def global_keys_for_para_body(document_key: str, prefix: str, body: str) -> List
 
 
 def target_level_from_global_key(global_key: str) -> str:
-    if "_buchst_" in global_key:
+    root_index, root_marker = last_structural_marker(global_key)
+    structural_tail = global_key[root_index:] if root_index >= 0 else ""
+    if "_buchst_" in structural_tail:
         return "letter"
-    if "_nr_" in global_key:
+    if "_nr_" in structural_tail:
         return "number"
-    if "_satz_" in global_key:
+    if "_satz_" in structural_tail:
         return "sentence"
-    if "_abs_" in global_key:
+    if "_abs_" in structural_tail:
         return "subsection"
-    if "_tabelle_" in global_key:
+    if "_tabelle_" in structural_tail:
         return "table"
-    if "_anlage_" in global_key or "_anhang_" in global_key:
+    if root_marker in ("anlage", "anhang"):
         return "annex"
-    if "_art_" in global_key:
+    if root_marker == "art":
         return "article"
-    if "_para_" in global_key:
+    if root_marker == "para":
         return "paragraph"
     return "document"
+
+
+def last_structural_marker(global_key: str) -> Tuple[int, Optional[str]]:
+    candidates = [
+        (global_key.rfind("_{}_".format(marker)), marker)
+        for marker in ("para", "art", "anlage", "anhang")
+    ]
+    index, marker = max(candidates, key=lambda item: item[0])
+    return (index, marker) if index >= 0 else (-1, None)
 
 
 def strip_to_nearest_keys(global_key: str) -> Iterable[str]:
     parts = global_key.split("_")
     cut_markers = ("buchst", "nr", "satz", "abs", "tabelle")
+    root_index, _root_marker = last_structural_marker(global_key)
+    if root_index < 0:
+        return
+    structural_start = len(global_key[:root_index].split("_"))
     while True:
         found = False
         for marker in cut_markers:
-            if marker in parts:
-                idx = len(parts) - 1 - parts[::-1].index(marker)
+            positions = [
+                index
+                for index, part in enumerate(parts)
+                if part == marker and index >= structural_start
+            ]
+            if positions:
+                idx = positions[-1]
                 if idx >= 0:
                     parts = parts[:idx]
                     found = True
@@ -384,10 +691,13 @@ def strip_to_nearest_keys(global_key: str) -> Iterable[str]:
 
 
 def modeled_target_key(global_key: str) -> str:
-    parts = global_key.split("_")
+    root_index, _root_marker = last_structural_marker(global_key)
+    if root_index < 0:
+        return global_key
     for marker in ("buchst", "nr", "satz"):
-        if marker in parts:
-            return "_".join(parts[: parts.index(marker)])
+        marker_index = global_key.find("_{}_".format(marker), root_index)
+        if marker_index >= 0:
+            return global_key[:marker_index]
     return global_key
 
 
@@ -421,6 +731,7 @@ def relationship(rel_type: str, start_id: str, end_id: str, properties: Dict[str
         properties.get("mention_text", ""),
         properties.get("char_start", ""),
         properties.get("target_global_key", ""),
+        properties.get("requested_target_global_key", ""),
     )
     return {
         "id": rel_id,
@@ -439,6 +750,8 @@ def reference_target_node(global_key: str, props: Dict[str, Any]) -> Dict[str, A
         "target_document_key": props.get("target_document_key"),
         "target_level": props.get("target_level"),
         "reference_kind": props.get("reference_kind"),
+        "resolution_method": props.get("resolution_method"),
+        "requested_target_global_key": props.get("requested_target_global_key"),
         "display_name": props.get("normalized_reference") or global_key,
     }
     if props.get("target_title_key"):
@@ -474,10 +787,22 @@ class ReferenceExtractor:
         self._index_graph()
 
     def register_document_alias(self, alias: Optional[str], document_global_key: str, document_id: str) -> None:
-        alias_key = slugify(alias or "")
-        if not alias_key or not document_global_key:
+        if not alias or not document_global_key:
             return
-        self._document_alias_candidates.setdefault(alias_key, set()).add((document_global_key, document_id))
+        alias_keys = {
+            slugify(alias),
+            slugify(strip_trailing_footnote_markers(alias)),
+        }
+        alias_keys.update(
+            alias_key.replace("_", "")
+            for alias_key in list(alias_keys)
+            if alias_key
+        )
+        for candidate_alias in alias_keys:
+            if candidate_alias:
+                self._document_alias_candidates.setdefault(candidate_alias, set()).add(
+                    (document_global_key, document_id)
+                )
 
     def _index_graph(self) -> None:
         for node in self.graph.get("nodes") or []:
@@ -504,12 +829,23 @@ class ReferenceExtractor:
                     "short_title",
                     "full_title",
                     "full_citation",
+                    "jurabk",
                     "source_pdf",
                     "source_xml",
                     "source_zip",
+                    "base_celex",
+                    "consolidated_celex",
+                    "citation_aliases",
                 ):
                     alias = props.get(alias_field)
-                    if alias:
+                    if isinstance(alias, list):
+                        for alias_value in alias:
+                            self.register_document_alias(
+                                alias_value,
+                                document_global_key,
+                                node["id"],
+                            )
+                    elif alias:
                         self.register_document_alias(alias, document_global_key, node["id"])
                 for alias in source_pdf_aliases(props.get("source_pdf")):
                     self.register_document_alias(alias, document_global_key, node["id"])
@@ -520,6 +856,38 @@ class ReferenceExtractor:
                     self.register_document_alias(alias, document_global_key, node["id"])
                 for alias in title_aliases_from_citation(props.get("full_citation")):
                     self.register_document_alias(alias, document_global_key, node["id"])
+                metadata_json = props.get("metadata_json")
+                if isinstance(metadata_json, str):
+                    try:
+                        metadata = json.loads(metadata_json)
+                    except (TypeError, ValueError):
+                        metadata = {}
+                    for alias in metadata.get("jurabk") or []:
+                        self.register_document_alias(
+                            alias,
+                            document_global_key,
+                            node["id"],
+                        )
+                for title_field in (
+                    "title",
+                    "short_title",
+                    "full_title",
+                    "full_citation",
+                ):
+                    for alias in leading_compound_title_aliases(
+                        props.get(title_field)
+                    ):
+                        self.register_document_alias(
+                            alias,
+                            document_global_key,
+                            node["id"],
+                        )
+                    for alias in title_article_aliases(props.get(title_field)):
+                        self.register_document_alias(
+                            alias,
+                            document_global_key,
+                            node["id"],
+                        )
             if "StructuralUnit" in labels:
                 self.unit_by_id[node["id"]] = node
             if "Chunk" in labels:
@@ -535,6 +903,27 @@ class ReferenceExtractor:
                     chunk["id"],
                 )
             )
+        # Older XML exports appended a physical table ordinal to otherwise
+        # canonical table keys (for example ``..._tabelle_3_4``).  Register
+        # the legal citation key as an alias so references to "Tabelle 3"
+        # still resolve to the exact table rather than falling back to its
+        # parent annex.
+        for unit_id, unit in self.unit_by_id.items():
+            props = unit.get("properties") or {}
+            if props.get("unit_type") != "table":
+                continue
+            number = str(props.get("number") or "").strip()
+            if not number or "unbezeichnet" in number.lower():
+                continue
+            parent = self.unit_by_id.get(props.get("parent_unit_id") or "")
+            parent_global_key = (parent or {}).get("properties", {}).get("global_key")
+            if not parent_global_key:
+                continue
+            semantic_table_key = "{}_tabelle_{}".format(
+                parent_global_key,
+                slugify(number),
+            )
+            self.global_to_node_id.setdefault(semantic_table_key, unit_id)
         for alias_key, candidates in self._document_alias_candidates.items():
             if len(candidates) != 1:
                 continue
@@ -577,11 +966,15 @@ class ReferenceExtractor:
                     "abbreviation",
                     "title",
                     "short_title",
+                    "jurabk",
                     "source_xml",
                     "source_zip",
                 ):
-                    if doc_props.get(field):
-                        aliases.add(slugify(doc_props[field]))
+                    value = doc_props.get(field)
+                    if isinstance(value, list):
+                        aliases.update(slugify(alias) for alias in value)
+                    elif value:
+                        aliases.add(slugify(value))
                 aliases.update(
                     slugify(alias)
                     for alias in source_xml_aliases(
@@ -633,6 +1026,13 @@ class ReferenceExtractor:
             return node_id
         return None
 
+    def mapped_document_key_for_alias(self, key: Optional[str]) -> Optional[str]:
+        normalized = slugify(key or "")
+        return (
+            self.document_alias_to_global_key.get(normalized)
+            or self.document_alias_to_global_key.get(normalized.replace("_", ""))
+        )
+
     def representative_chunk_id_for_unit(self, unit_id: str) -> Optional[str]:
         chunks = [
             chunk
@@ -670,6 +1070,7 @@ class ReferenceExtractor:
             "target_document_key": target_document_key,
             "target_level": "document",
             "reference_kind": props.get("reference_kind"),
+            "resolution_method": props.get("resolution_method"),
             "display_name": target_document_key,
         }
         if props.get("target_title_key"):
@@ -694,7 +1095,7 @@ class ReferenceExtractor:
                 )
             )
         document_part = document_part_from_target_key(target_global_key)
-        mapped_document_key = self.document_alias_to_global_key.get(slugify(document_part))
+        mapped_document_key = self.mapped_document_key_for_alias(document_part)
         if mapped_document_key and mapped_document_key != document_part:
             if target_global_key == document_part:
                 candidate_keys.append(mapped_document_key)
@@ -727,22 +1128,61 @@ class ReferenceExtractor:
         target_title_key: Optional[str] = None,
     ) -> None:
         target_global_key = modeled_target_key(target_global_key)
+        requested_target_global_key = target_global_key
         source_id = source_chunk["id"]
         source_unit_id = self.source_unit_id_for_chunk(source_chunk)
         target_id, status, resolved_target_global_key = self.resolve_target(target_global_key)
         effective_target_global_key = resolved_target_global_key or target_global_key
+        if status == "resolved":
+            requested_level = target_level_from_global_key(
+                requested_target_global_key
+            )
+            resolved_level = target_level_from_global_key(
+                resolved_target_global_key or ""
+            )
+            resolution_method = (
+                "exact"
+                if requested_level == resolved_level
+                else "nearest_ancestor"
+            )
+        else:
+            mapped_document_key = self.mapped_document_key_for_alias(
+                target_document_key
+            )
+            target_document_present = bool(
+                self.document_id_for_key(target_document_key)
+                or self.document_id_for_key(mapped_document_key)
+            )
+            resolution_method = (
+                "target_unit_missing"
+                if target_document_present
+                else "target_document_missing"
+            )
 
         # Skip pure self references introduced by paragraph/table headings.
         if target_id == source_id or target_id == source_unit_id:
             return
 
-        ref_key = (source_id, effective_target_global_key, mention_text, char_start, char_end)
+        ref_key = (
+            source_id,
+            requested_target_global_key,
+            mention_text,
+            char_start,
+            char_end,
+        )
         if ref_key in self.seen_reference_keys:
             return
         self.seen_reference_keys.add(ref_key)
 
         props = {
-            "reference_id": stable_id("ref", source_id, effective_target_global_key, char_start, char_end, mention_text),
+            "reference_id": stable_id(
+                "ref",
+                source_id,
+                requested_target_global_key,
+                char_start,
+                char_end,
+                mention_text,
+            ),
             "source_chunk_id": source_id,
             "source_unit_id": source_unit_id,
             "source_document_id": self.source_document_id_for_chunk(source_chunk),
@@ -751,9 +1191,12 @@ class ReferenceExtractor:
             "reference_kind": reference_kind,
             "target_document_key": target_document_key,
             "target_global_key": effective_target_global_key,
+            "requested_target_global_key": requested_target_global_key,
+            "resolved_target_global_key": resolved_target_global_key,
             "target_title_key": target_title_key,
             "target_level": target_level_from_global_key(effective_target_global_key),
             "resolution_status": status,
+            "resolution_method": resolution_method,
             "char_start": char_start,
             "char_end": char_end,
             "extraction_method": "deterministic_regex_v0.1.0",
@@ -881,7 +1324,10 @@ class ReferenceExtractor:
             return
         occupied: List[Tuple[int, int]] = []
         occupied.extend(self.extract_external_long(chunk, text, offset))
+        occupied.extend(self.extract_external_acts(chunk, text, offset, occupied))
         occupied.extend(self.extract_external_abbrev(chunk, text, offset, occupied))
+        occupied.extend(self.extract_external_context(chunk, text, offset, occupied))
+        occupied.extend(self.extract_internal_article(chunk, text, offset, occupied))
         occupied.extend(self.extract_internal_annex(chunk, text, offset, occupied))
         occupied.extend(self.extract_internal_para(chunk, text, offset, occupied))
         self.extract_contextual_subsection(chunk, text, offset, occupied)
@@ -889,31 +1335,457 @@ class ReferenceExtractor:
     def overlaps(self, start: int, end: int, spans: List[Tuple[int, int]]) -> bool:
         return any(start < span_end and end > span_start for span_start, span_end in spans)
 
+    def external_target_keys(
+        self,
+        match: re.Match,
+        law_key: str,
+        prefix: str,
+    ) -> List[str]:
+        body = match.group("body")
+        if prefix != "annex":
+            return global_keys_for_para_body(law_key, prefix, body)
+        annex_prefix = annex_key_prefix(match.group("annex_kind"))
+        annex_numbers = split_para_body(body)
+        table_numbers = split_table_body(match.groupdict().get("table_body"))
+        if table_numbers:
+            return [
+                "{}_{}_{}_tabelle_{}".format(
+                    law_key,
+                    annex_prefix,
+                    slugify(annex_number),
+                    slugify(table_number),
+                )
+                for annex_number in annex_numbers
+                for table_number in table_numbers
+            ]
+        return [
+            "{}_{}_{}".format(
+                law_key,
+                annex_prefix,
+                slugify(annex_number),
+            )
+            for annex_number in annex_numbers
+        ]
+
+    def add_external_match_references(
+        self,
+        chunk: Dict[str, Any],
+        match: re.Match,
+        offset: int,
+        law_key: str,
+        prefix: str,
+        reference_kind: str = "external_long_name",
+        target_title_key: Optional[str] = None,
+    ) -> None:
+        body = match.group("body")
+        for target_key in self.external_target_keys(match, law_key, prefix):
+            self.add_reference(
+                chunk,
+                match.group("mention"),
+                offset + match.start(),
+                offset + match.end(),
+                law_key,
+                target_key,
+                reference_kind,
+                "{} {} {}".format(law_key, prefix, body),
+                target_title_key=target_title_key,
+            )
+
+    def propagate_external_scope_backward(
+        self,
+        chunk: Dict[str, Any],
+        text: str,
+        offset: int,
+        anchor: re.Match,
+        law_key: str,
+        prefix: str,
+        occupied: List[Tuple[int, int]],
+        reference_kind: str = "external_long_name",
+        target_title_key: Optional[str] = None,
+    ) -> List[Tuple[int, int]]:
+        """Apply a trailing law name to an immediately preceding citation list."""
+        if prefix == "para":
+            candidate_pattern = INTERNAL_PARA_RE
+        elif prefix == "art":
+            candidate_pattern = INTERNAL_ARTICLE_RE
+        elif prefix == "annex":
+            candidate_pattern = INTERNAL_ANNEX_RE
+        else:
+            return []
+
+        propagated: List[Tuple[int, int]] = []
+        current_start = anchor.start()
+        candidates = [
+            candidate
+            for candidate in candidate_pattern.finditer(text)
+            if candidate.end() <= current_start
+        ]
+        for candidate in reversed(candidates):
+            if self.overlaps(candidate.start(), candidate.end(), occupied + propagated):
+                break
+            bridge = text[candidate.end():current_start]
+            if not EXTERNAL_SCOPE_BRIDGE_RE.fullmatch(bridge):
+                break
+            # A repeated genitive article can either continue one external
+            # citation list or introduce a separate citation.  Prefer the
+            # latter when the preceding target exists in the source document,
+            # as in "§ 78 Absatz 2 und des § 5 des VStGB".
+            if (
+                prefix == "para"
+                and re.search(
+                    r"\b(?:und|oder|sowie)\s+(?:des|der|die|den)\b",
+                    bridge,
+                    flags=re.IGNORECASE,
+                )
+            ):
+                source_document_key = self.document_key_for_chunk(chunk)
+                internal_candidate_keys = global_keys_for_para_body(
+                    source_document_key,
+                    "para",
+                    candidate.group("body"),
+                )
+                if any(
+                    self.resolve_target(target_key)[1] == "resolved"
+                    for target_key in internal_candidate_keys
+                ):
+                    break
+            self.add_external_match_references(
+                chunk,
+                candidate,
+                offset,
+                law_key,
+                prefix,
+                reference_kind=reference_kind,
+                target_title_key=target_title_key,
+            )
+            propagated.append((candidate.start(), candidate.end()))
+            current_start = candidate.start()
+        return propagated
+
+    def propagate_external_anaphora_forward(
+        self,
+        chunk: Dict[str, Any],
+        text: str,
+        offset: int,
+        anchor: re.Match,
+        law_key: str,
+        occupied: List[Tuple[int, int]],
+    ) -> List[Tuple[int, int]]:
+        """Resolve the repeated citation in boilerplate such as ", von denen § …"."""
+        window_end = min(len(text), anchor.end() + 450)
+        tail = text[anchor.end():window_end]
+        anaphora = re.search(
+            r"(?:,\s+von\s+denen\s+|"
+            r"\bverordnet\b.{0,240}?\bund\s+zu\s+)",
+            tail,
+            flags=re.DOTALL,
+        )
+        if not anaphora:
+            return []
+        scope_start = anchor.end() + anaphora.end()
+        match = INTERNAL_PARA_RE.search(text, scope_start, min(len(text), scope_start + 180))
+        if not match or text[scope_start:match.start()].strip():
+            return []
+        if self.overlaps(match.start(), match.end(), occupied):
+            return []
+        self.add_external_match_references(
+            chunk,
+            match,
+            offset,
+            law_key,
+            "para",
+            target_title_key=law_key,
+        )
+        return [(match.start(), match.end())]
+
     def extract_external_long(self, chunk: Dict[str, Any], text: str, offset: int) -> List[Tuple[int, int]]:
         spans = []
-        for pattern, reference_kind, prefix in (
-            (PARA_EXTERNAL_LONG_RE, "external_long_name", "para"),
-            (ARTICLE_EXTERNAL_LONG_RE, "external_long_name", "art"),
+        for match in ARTICLE_PARA_EXTERNAL_LONG_RE.finditer(text):
+            if not plausible_law_name(match.group("law")):
+                continue
+            law_key = normalize_law_name(match.group("law"))
+            article_numbers = split_para_body(match.group("article_body"))
+            target_keys = []
+            for article_number in article_numbers:
+                article_key = "{}_art_{}".format(
+                    law_key,
+                    slugify(article_number),
+                )
+                target_keys.extend(
+                    global_keys_for_para_body(
+                        article_key,
+                        "para",
+                        match.group("para_body"),
+                    )
+                )
+            for target_key in target_keys:
+                self.add_reference(
+                    chunk,
+                    match.group("mention"),
+                    offset + match.start(),
+                    offset + match.end(),
+                    law_key,
+                    target_key,
+                    "external_long_name",
+                    target_key,
+                    target_title_key=law_key,
+                )
+            if target_keys:
+                spans.append((match.start(), match.end()))
+        for pattern, prefix in (
+            (PARA_EXTERNAL_GENERIC_RE, "para"),
+            (PARA_EXTERNAL_LONG_RE, "para"),
+            (ARTICLE_EXTERNAL_GENERIC_RE, "art"),
+            (ARTICLE_EXTERNAL_LONG_RE, "art"),
+            (ANNEX_EXTERNAL_GENERIC_RE, "annex"),
+            (ANNEX_EXTERNAL_LONG_RE, "annex"),
         ):
             for match in pattern.finditer(text):
-                law_key = normalize_law_name(match.group("law"))
-                body = match.group("body")
-                target_keys = global_keys_for_para_body(law_key, prefix, body)
-                if not target_keys:
+                if self.overlaps(match.start(), match.end(), spans):
                     continue
-                for target_key in target_keys:
-                    self.add_reference(
-                        chunk,
-                        match.group("mention"),
-                        offset + match.start(),
-                        offset + match.end(),
-                        law_key,
-                        target_key,
-                        reference_kind,
-                        "{} {} {}".format(law_key, prefix, body),
-                        target_title_key=law_key,
-                    )
+                if not plausible_law_name(match.group("law")):
+                    continue
+                law_key = normalize_law_name(match.group("law"))
+                if not self.external_target_keys(match, law_key, prefix):
+                    continue
+                self.add_external_match_references(
+                    chunk,
+                    match,
+                    offset,
+                    law_key,
+                    prefix,
+                    target_title_key=law_key,
+                )
+                propagated = self.propagate_external_scope_backward(
+                    chunk,
+                    text,
+                    offset,
+                    match,
+                    law_key,
+                    prefix,
+                    spans,
+                    target_title_key=law_key,
+                )
+                spans.extend(propagated)
                 spans.append((match.start(), match.end()))
+                spans.extend(
+                    self.propagate_external_anaphora_forward(
+                        chunk,
+                        text,
+                        offset,
+                        match,
+                        law_key,
+                        spans,
+                    )
+                )
+        return spans
+
+    def extract_external_acts(
+        self,
+        chunk: Dict[str, Any],
+        text: str,
+        offset: int,
+        occupied: List[Tuple[int, int]],
+    ) -> List[Tuple[int, int]]:
+        spans: List[Tuple[int, int]] = []
+        scoped_eu_act_spans: List[Tuple[int, int]] = []
+        direct_eu_spans = [
+            direct_match.span()
+            for direct_match in ARTICLE_EXTERNAL_EU_RE.finditer(text)
+        ]
+        for pattern, key_builder in (
+            (
+                ARTICLE_EXTERNAL_EU_RE,
+                lambda match: eu_act_key(
+                    match.group("act_type"),
+                    match.group("identifier"),
+                ),
+            ),
+            (
+                ARTICLE_EXTERNAL_DATED_ACT_RE,
+                lambda match: dated_act_key(
+                    match.group("act_type"),
+                    match.group("date"),
+                ),
+            ),
+            (
+                ARTICLE_EXTERNAL_FRAMEWORK_RE,
+                lambda match: named_act_key(
+                    match.group("act_type"),
+                    match.group("identifier"),
+                ),
+            ),
+            (
+                ARTICLE_EXTERNAL_DATED_INSTRUMENT_RE,
+                lambda match: dated_act_key(
+                    match.group("act_type"),
+                    match.group("date"),
+                ),
+            ),
+        ):
+            for match in pattern.finditer(text):
+                if self.overlaps(match.start(), match.end(), occupied + spans):
+                    continue
+                target_document_key = key_builder(match)
+                self.add_external_match_references(
+                    chunk,
+                    match,
+                    offset,
+                    target_document_key,
+                    "art",
+                    target_title_key=target_document_key,
+                )
+                propagated = self.propagate_external_scope_backward(
+                    chunk,
+                    text,
+                    offset,
+                    match,
+                    target_document_key,
+                    "art",
+                    occupied + spans,
+                    target_title_key=target_document_key,
+                )
+                spans.extend(propagated)
+                spans.append((match.start(), match.end()))
+                if pattern is ARTICLE_EXTERNAL_EU_RE:
+                    tail = text[match.end():min(len(text), match.end() + 1200)]
+                    amended = re.search(
+                        r"\bgeändert\s+worden\s+ist,\s+"
+                        r"(?:auch\s+)?in\s+Verbindung\s+mit\s+",
+                        tail,
+                    )
+                    if amended:
+                        scope_start = match.end() + amended.end()
+                        for candidate in INTERNAL_ARTICLE_RE.finditer(
+                            text,
+                            scope_start,
+                        ):
+                            if self.overlaps(
+                                candidate.start(),
+                                candidate.end(),
+                                direct_eu_spans,
+                            ):
+                                continue
+                            if self.overlaps(
+                                candidate.start(),
+                                candidate.end(),
+                                occupied + spans,
+                            ):
+                                continue
+                            self.add_external_match_references(
+                                chunk,
+                                candidate,
+                                offset,
+                                target_document_key,
+                                "art",
+                                target_title_key=target_document_key,
+                            )
+                            spans.append((candidate.start(), candidate.end()))
+
+        governing_acts = list(GOVERNING_EU_ACT_RE.finditer(text))
+        for index, governing in enumerate(governing_acts):
+            scoped_eu_act_spans.append(governing.span())
+            target_document_key = eu_act_key(
+                governing.group("act_type"),
+                governing.group("identifier"),
+            )
+            block_end = (
+                governing_acts[index + 1].start()
+                if index + 1 < len(governing_acts)
+                else len(text)
+            )
+            for match in INTERNAL_ARTICLE_RE.finditer(
+                text,
+                governing.end(),
+                block_end,
+            ):
+                if self.overlaps(match.start(), match.end(), occupied + spans):
+                    continue
+                self.add_external_match_references(
+                    chunk,
+                    match,
+                    offset,
+                    target_document_key,
+                    "art",
+                    target_title_key=target_document_key,
+                )
+                spans.append((match.start(), match.end()))
+
+        eu_mentions = list(EU_ACT_RE.finditer(text))
+        for match in INTERNAL_ARTICLE_RE.finditer(text):
+            if self.overlaps(match.start(), match.end(), occupied + spans):
+                continue
+            following = [
+                act
+                for act in eu_mentions
+                if 0 <= act.start() - match.end() <= 400
+            ]
+            if not following:
+                continue
+            nearest = min(following, key=lambda act: act.start())
+            scoped_eu_act_spans.append(nearest.span())
+            target_document_key = eu_act_key(
+                nearest.group("act_type"),
+                nearest.group("identifier"),
+            )
+            self.add_external_match_references(
+                chunk,
+                match,
+                offset,
+                target_document_key,
+                "art",
+                target_title_key=target_document_key,
+            )
+            spans.append((match.start(), match.end()))
+
+        eu_keys = {
+            eu_act_key(match.group("act_type"), match.group("identifier"))
+            for match in EU_ACT_RE.finditer(text)
+        }
+        if len(eu_keys) == 1:
+            target_document_key = next(iter(eu_keys))
+            internal_matches = list(INTERNAL_ARTICLE_RE.finditer(text))
+            if internal_matches:
+                scoped_eu_act_spans.extend(match.span() for match in eu_mentions)
+            for match in internal_matches:
+                if self.overlaps(match.start(), match.end(), occupied + spans):
+                    continue
+                self.add_external_match_references(
+                    chunk,
+                    match,
+                    offset,
+                    target_document_key,
+                    "art",
+                    target_title_key=target_document_key,
+                )
+                spans.append((match.start(), match.end()))
+
+        # Preserve explicit document-level citations even when no article is
+        # named. Article-scoped matches above already occupy their complete
+        # mention span and therefore are not duplicated here.
+        for match in eu_mentions:
+            if self.overlaps(
+                match.start(),
+                match.end(),
+                occupied + spans + scoped_eu_act_spans,
+            ):
+                continue
+            target_document_key = eu_act_key(
+                match.group("act_type"),
+                match.group("identifier"),
+            )
+            self.add_reference(
+                chunk,
+                match.group(0),
+                offset + match.start(),
+                offset + match.end(),
+                target_document_key,
+                target_document_key,
+                "external",
+                target_document_key,
+                target_title_key=target_document_key,
+            )
+            spans.append((match.start(), match.end()))
         return spans
 
     def extract_external_abbrev(
@@ -924,30 +1796,139 @@ class ReferenceExtractor:
         occupied: List[Tuple[int, int]],
     ) -> List[Tuple[int, int]]:
         spans = []
-        for match in PARA_EXTERNAL_ABBREV_RE.finditer(text):
-            if self.overlaps(match.start(), match.end(), occupied):
+        for pattern, prefix in (
+            (PARA_EXTERNAL_ABBREV_RE, "para"),
+            (ARTICLE_EXTERNAL_ABBREV_RE, "art"),
+            (ANNEX_EXTERNAL_ABBREV_RE, "annex"),
+        ):
+            for match in pattern.finditer(text):
+                if self.overlaps(match.start(), match.end(), occupied + spans):
+                    continue
+                abbr_key = normalize_abbreviation(match.group("abbr"))
+                if abbr_key in self.document_aliases_for_chunk(chunk):
+                    continue
+                target_document_key = self.document_alias_to_global_key.get(abbr_key, abbr_key)
+                if not self.external_target_keys(match, target_document_key, prefix):
+                    continue
+                self.add_external_match_references(
+                    chunk,
+                    match,
+                    offset,
+                    target_document_key,
+                    prefix,
+                    reference_kind="external_abbreviation",
+                )
+                propagated = self.propagate_external_scope_backward(
+                    chunk,
+                    text,
+                    offset,
+                    match,
+                    target_document_key,
+                    prefix,
+                    occupied + spans,
+                    reference_kind="external_abbreviation",
+                )
+                spans.extend(propagated)
+                spans.append((match.start(), match.end()))
+        return spans
+
+    def extract_internal_article(
+        self,
+        chunk: Dict[str, Any],
+        text: str,
+        offset: int,
+        occupied: List[Tuple[int, int]],
+    ) -> List[Tuple[int, int]]:
+        spans: List[Tuple[int, int]] = []
+        doc_key = self.document_key_for_chunk(chunk)
+        source_id = chunk["id"]
+        source_unit_id = self.source_unit_id_for_chunk(chunk)
+        for match in INTERNAL_ARTICLE_RE.finditer(text):
+            if self.overlaps(match.start(), match.end(), occupied + spans):
                 continue
-            abbr_key = normalize_abbreviation(match.group("abbr"))
-            if abbr_key in self.document_aliases_for_chunk(chunk):
-                continue
-            target_document_key = self.document_alias_to_global_key.get(abbr_key, abbr_key)
-            body = match.group("body")
-            target_keys = global_keys_for_para_body(target_document_key, "para", body)
-            if not target_keys:
-                continue
+            target_keys = global_keys_for_para_body(
+                doc_key,
+                "art",
+                match.group("body"),
+            )
+            resolvable_keys = []
             for target_key in target_keys:
+                target_id, status, resolved_key = self.resolve_target(target_key)
+                if (
+                    status == "resolved"
+                    and resolved_key == target_key
+                    and target_id not in {source_id, source_unit_id}
+                ):
+                    resolvable_keys.append(target_key)
+            if not resolvable_keys:
+                continue
+            for target_key in resolvable_keys:
                 self.add_reference(
                     chunk,
                     match.group("mention"),
                     offset + match.start(),
                     offset + match.end(),
-                    target_document_key,
+                    doc_key,
                     target_key,
-                    "external_abbreviation",
-                    "{} para {}".format(target_document_key, body),
-                    target_title_key=None,
+                    "internal",
+                    target_key,
                 )
             spans.append((match.start(), match.end()))
+        return spans
+
+    def extract_external_context(
+        self,
+        chunk: Dict[str, Any],
+        text: str,
+        offset: int,
+        occupied: List[Tuple[int, int]],
+    ) -> List[Tuple[int, int]]:
+        """Resolve references governed by an explicit preceding law context."""
+        spans: List[Tuple[int, int]] = []
+        headings = list(LAW_SECTION_CONTEXT_RE.finditer(text))
+        for index, heading in enumerate(headings):
+            law_key = normalize_law_name(heading.group("law"))
+            block_end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+            next_list_item = LIST_ITEM_HEADING_RE.search(text, heading.end())
+            if next_list_item:
+                block_end = min(block_end, next_list_item.start())
+            for match in INTERNAL_PARA_RE.finditer(text, heading.end(), block_end):
+                if self.overlaps(match.start(), match.end(), occupied + spans):
+                    continue
+                self.add_external_match_references(
+                    chunk,
+                    match,
+                    offset,
+                    law_key,
+                    "para",
+                    target_title_key=law_key,
+                )
+                spans.append((match.start(), match.end()))
+
+        for scope in LAW_FORWARD_SCOPE_RE.finditer(text):
+            law_key = normalize_law_name(scope.group("law"))
+            current_end = scope.end()
+            first = True
+            for match in INTERNAL_PARA_RE.finditer(text, current_end):
+                bridge = text[current_end:match.start()]
+                if first:
+                    if bridge.strip():
+                        break
+                    first = False
+                elif not EXTERNAL_SCOPE_BRIDGE_RE.fullmatch(bridge):
+                    break
+                if self.overlaps(match.start(), match.end(), occupied + spans):
+                    break
+                self.add_external_match_references(
+                    chunk,
+                    match,
+                    offset,
+                    law_key,
+                    "para",
+                    target_title_key=law_key,
+                )
+                spans.append((match.start(), match.end()))
+                current_end = match.end()
         return spans
 
     def extract_internal_annex(
@@ -1008,10 +1989,17 @@ class ReferenceExtractor:
     ) -> List[Tuple[int, int]]:
         spans = []
         source_global = (chunk.get("properties") or {}).get("global_key") or ""
-        para_match = re.search(r"^(?P<doc>.+?)_para_(?P<num>\d+[a-z]?)", source_global)
-        if not para_match:
+        context_match = re.search(
+            r"^(?P<doc>.+?)_(?P<kind>para|art)_(?P<num>\d+[a-z]?)",
+            source_global,
+        )
+        if not context_match:
             return spans
-        base_key = "{}_para_{}".format(para_match.group("doc"), para_match.group("num"))
+        base_key = "{}_{}_{}".format(
+            context_match.group("doc"),
+            context_match.group("kind"),
+            context_match.group("num"),
+        )
         for match in CONTEXTUAL_SUBSECTION_RE.finditer(text):
             if self.overlaps(match.start(), match.end(), occupied):
                 continue
@@ -1026,7 +2014,7 @@ class ReferenceExtractor:
                 match.group("mention"),
                 offset + match.start(),
                 offset + match.end(),
-                para_match.group("doc"),
+                context_match.group("doc"),
                 target_key,
                 "internal",
                 target_key,

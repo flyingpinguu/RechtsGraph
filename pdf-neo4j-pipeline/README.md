@@ -22,6 +22,24 @@ XML-Reader und kein externes Produkt.
 Die alte PDF-zentrierte Version bleibt durch Commit `4341102` und Tag
 `pre-gii-xml-migration` reproduzierbar.
 
+## Installation
+
+Vorausgesetzt werden Python 3.9 oder neuer und fuer den Graphimport eine
+laufende Neo4j-Instanz. Das Repository enthaelt nur Pipeline-Code, Tests und
+Dokumentation; heruntergeladene XML-/PDF-Korpora, generierte JSONs und
+Neo4j-Importdateien bleiben lokal.
+
+```bash
+cd pdf-neo4j-pipeline
+python3 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python -m pytest
+```
+
+Alle folgenden Befehle gehen davon aus, dass sie aus
+`pdf-neo4j-pipeline/` gestartet werden.
+
 ## Aktueller Stand
 
 Aktive Skripte:
@@ -98,6 +116,80 @@ Prozessfehler, ausgewiesen und danach vom engen PDF-Fallback uebernommen.
 
 Der ausfuehrliche Entscheidungs- und Implementierungsnachweis steht in
 `../XML_MIGRATION_PLAN.md`.
+
+## EUR-Lex-Konsolidierungen aus Cellar
+
+Der deutsche konsolidierte EU-Rechtsbestand wird separat aus Cellar bezogen.
+Der Downloader inventarisiert konsolidierte Sektor-3-Akte descriptorweise ueber
+SPARQL, waehlt je Basisrechtsakt den neuesten Stand bis zum Korpus-Stichtag und
+laedt bevorzugt Formex 4. Aeltere Manifestationen fallen kontrolliert auf XHTML,
+HTML oder PDF zurueck. Cellar-Works ohne deutsche Expression bleiben als
+`unavailable_deu` im Register sichtbar.
+
+```bash
+./.venv/bin/python scripts/download_cellar_consolidated.py \
+  --snapshot-date 2026-08-09 \
+  --workers 8 \
+  --resume
+```
+
+Standardausgabe ist `../eurlex_consolidated_de/` mit `register.json`,
+`register.jsonl`, `SUMMARY.md` und den komprimierten Manifestationen unter
+`packages/<descriptor>/`.
+
+Der Formex-Adapter ueberfuehrt konsolidierte Verordnungen (`R`) und Richtlinien
+(`L`) in denselben kanonischen Vertrag wie der deutsche GII-Adapter. CELEX-Keys
+bilden stabile Dokument-, Artikel-, Absatz- und Anlagenadressen. Komplexe
+Formex-Tabellen behalten Zellspannen, Kopfzeilen, Notizen und Asset-Verweise;
+Tabellen ueber 3.500 Tokens werden zeilenweise geteilt und wiederholen Titel,
+Spalten- und Tabellenkopf. Eine einzelne uebergrosse Tabellenzeile bleibt
+atomar, damit keine Zelle zerschnitten wird.
+
+```bash
+# Formex in kanonische Raw-JSONs ueberfuehren.
+./.venv/bin/python scripts/batch_extract_eurlex_formex.py \
+  --workers 4 --resume
+
+# Struktur, Hashes, IDs und Tabellenlimits pruefen.
+./.venv/bin/python scripts/audit_eurlex_formex_corpus.py
+
+# Getrennte, speicherschonende Content-Graphen und Artikel-Lookup bauen.
+./.venv/bin/python scripts/batch_build_eurlex_content_graphs.py \
+  --workers 4 --resume
+./.venv/bin/python scripts/build_eurlex_article_lookup.py
+
+# Neo4j-CSV und idempotentes LOAD-CSV-Skript erzeugen. Das CSV-Verzeichnis
+# muss unter dem import-Verzeichnis der jeweiligen Desktop-Instanz liegen.
+./.venv/bin/python scripts/export_eurlex_manifest_neo4j_csv.py \
+  --graph-manifest output/eurlex_formex_rl/content_graph_manifest.json \
+  --csv-dir "$NEO4J_IMPORT/eurlex_formex_rl" \
+  --csv-uri-prefix file:///eurlex_formex_rl/ \
+  --output-cypher output/eurlex_formex_rl/neo4j/eurlex_formex_rl_load.cypher
+
+cypher-shell -d gii-xml-chunked \
+  -f output/eurlex_formex_rl/neo4j/eurlex_formex_rl_load.cypher
+```
+
+Formex-ZIP und Raw-JSON bleiben die vollstaendige Inhalts- und
+Provenienzquelle. Neo4j enthaelt die gemeinsame Abfrageebene aus Metadaten,
+Struktur, Retrieval-Chunks und Beziehungen; grosses XML-Markup, Assets und
+vollstaendiges `table_data` werden dort nicht dupliziert. Der kompakte Lookup
+unter `output/eurlex_formex_rl/lookup/article_lookup.json` fuehrt von CELEX,
+Artikel und Absatz zu den zugehoerigen Chunk-IDs.
+
+Vollkorpus-Stand vom 2026-08-10:
+
+- 5.084 konsolidierte Formex-Akte (`R`: 4.092, `L`: 992), ohne technische
+  Extraktionsfehler.
+- 371.208 Structural Units, 503.816 Chunks, 89.750 Artikel, 16.192 Anlagen
+  und 40.353 Tabellen.
+- Korpusaudit ohne harte Findings; 289 atomar erhaltene Tabellenzeilen liegen
+  allein bereits ueber dem 3.500-Token-Limit.
+- Import in `gii-xml-chunked`: zusammen mit dem deutschen Bestand 1.442.529
+  Knoten und 4.390.330 Kanten.
+- 838.202 konkrete EU-zu-EU- und 45.487 konkrete deutsche-zu-EU-Verweiskanten;
+  externe oder nicht im gewaehlten Korpus enthaltene Ziele bleiben als
+  auditable `ReferenceTarget`-Knoten offen.
 
 ## Legacy-PDF-Extraktion
 

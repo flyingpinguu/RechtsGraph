@@ -18,6 +18,13 @@ from normtext_extractor.gii_xml_tables import (
     normalize_inline_text,
     parse_cals_table,
 )
+from normtext_extractor.table_chunking import (
+    DEFAULT_ENCODING,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_TARGET_TOKENS,
+    split_table_rows,
+    table_rows_text,
+)
 
 
 PARAGRAPH_LABEL_RE = re.compile(r"^§+\s*(\d+[a-z]?)\b", re.IGNORECASE)
@@ -66,7 +73,10 @@ MAX_XML_BYTES = 256 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 20_000
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_MEMBER_COMPRESSION_RATIO = 1_000
-GII_XML_EXTRACTOR_VERSION = "1.0.0"
+GII_XML_EXTRACTOR_VERSION = "1.1.0"
+TABLE_CHUNK_TOKEN_ENCODING = DEFAULT_ENCODING
+TABLE_CHUNK_MAX_TOKENS = DEFAULT_MAX_TOKENS
+TABLE_CHUNK_TARGET_TOKENS = DEFAULT_TARGET_TOKENS
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -96,6 +106,15 @@ def slugify(value: str) -> str:
 
 def _clean_text(value: Optional[str]) -> str:
     return normalize_inline_text(value or "")
+
+
+def _identity_text(value: Optional[str]) -> str:
+    """Remove visible footnote markers that are not part of a legal title."""
+    return re.sub(
+        r"(?:\s*\[[^\[\]\r\n]+\])+\s*$",
+        "",
+        _clean_text(value),
+    ).strip()
 
 
 def _asset_description(element: ET.Element) -> str:
@@ -907,10 +926,7 @@ def _metadata_fallback_text(
 
 
 def _table_text(columns: Sequence[str], rows: Sequence[Dict[str, Any]]) -> str:
-    lines = [" | ".join(columns)]
-    for row in rows:
-        lines.append(" | ".join(str(row.get(column) or "") for column in columns))
-    return "\n".join(lines).strip()
+    return table_rows_text(columns, rows)
 
 
 def _document_metadata(root: ET.Element) -> Tuple[ET.Element, Dict[str, Any]]:
@@ -1055,7 +1071,7 @@ def extract_document_from_xml(
     title = root_meta.get("long_title") or root_meta.get("short_title") or abbreviation
     short_title = root_meta.get("short_title") or title
     document_key = slugify(abbreviation) or slugify(document_number)
-    document_global_key = slugify(short_title) or document_key
+    document_global_key = slugify(_identity_text(short_title)) or document_key
     doc_id = "doc_{}".format(make_id("gii_xml", document_number or package["xml_sha256"]))
     source_pdf = (source_manifest_entry or {}).get("pdf_file")
     source_pdf = source_pdf or (source_manifest_entry or {}).get("pdf_relative_path")
@@ -1577,7 +1593,12 @@ def extract_document_from_xml(
         for table_index, record in enumerate(table_records, 1):
             table = record["table"]
             table_label = record["label"]
-            table_component = "{}_{}".format(slugify(table_label), table_index)
+            # The official table label is the semantic citation key.  A
+            # physical table ordinal made keys such as ``tabelle_3_4``
+            # impossible to resolve from a citation to "Tabelle 3".
+            # _deduplicate_key still adds a ``part_N`` suffix if a malformed
+            # source genuinely repeats the same label within one document.
+            table_component = slugify(table_label)
             table_global_key = _deduplicate_key(
                 "{}_{}".format(unit_global_key, table_component),
                 seen_unit_keys,
@@ -1654,12 +1675,31 @@ def extract_document_from_xml(
                         "table_index": table_index,
                     }
                 )
-            chunk_global_key = _deduplicate_key(
-                "{}_rows".format(table_global_key),
-                seen_chunk_keys,
+            table_parts = split_table_rows(
+                table_citation=table_citation,
+                table_title=record["title"] or "",
+                columns=columns,
+                rows=rows,
+                header_matrix=table.get("header_matrix") or [],
+                encoding_name=TABLE_CHUNK_TOKEN_ENCODING,
+                max_tokens=TABLE_CHUNK_MAX_TOKENS,
+                target_tokens=TABLE_CHUNK_TARGET_TOKENS,
             )
-            chunks.append(
-                {
+            for part_index, part in enumerate(table_parts, 1):
+                if part["was_split"]:
+                    chunk_key_base = "{}_rows_part_{:04d}".format(
+                        table_global_key,
+                        part_index,
+                    )
+                else:
+                    chunk_key_base = "{}_rows".format(table_global_key)
+                chunk_global_key = _deduplicate_key(
+                    chunk_key_base,
+                    seen_chunk_keys,
+                )
+                row_start = part.get("row_start")
+                row_end = part.get("row_end")
+                chunk = {
                     "chunk_id": _technical_node_id(
                         "chunk",
                         chunk_global_key,
@@ -1667,32 +1707,63 @@ def extract_document_from_xml(
                     ),
                     "global_key": chunk_global_key,
                     "legal_citation": table_citation,
-                    "display_name": table_citation,
+                    "display_name": (
+                        "{} Zeilen {}–{}".format(
+                            table_citation,
+                            row_start,
+                            row_end,
+                        )
+                        if part["was_split"]
+                        else table_citation
+                    ),
                     "chunk_type": "table_rows",
                     "unit_id": table_unit_id,
                     "document_global_key": document_global_key,
                     "parent_chunk_id": None,
                     "child_chunk_ids": [],
-                    "label": "rows",
+                    "label": (
+                        "rows {}-{}".format(row_start, row_end)
+                        if part["was_split"]
+                        else "rows"
+                    ),
                     "number": None,
-                    "sequence": 1,
-                    "source_order": [norm_index, table_index, 0],
+                    "sequence": part_index,
+                    "source_order": [norm_index, table_index, part_index - 1],
                     "page_id": None,
                     "page_range": None,
-                    "columns": columns,
-                    "column_header_text": " | ".join(columns),
+                    "columns": part["columns"],
+                    "column_header_text": part["column_header_text"],
+                    "header_matrix": part["header_matrix"],
+                    "table_title": part["table_title"],
+                    "table_part_index": (
+                        part.get("part_index") if part["was_split"] else None
+                    ),
+                    "table_part_count": (
+                        part.get("part_count") if part["was_split"] else None
+                    ),
+                    "table_chunk_token_count": part["token_count"],
+                    "table_chunk_token_encoding": part["token_encoding"],
+                    "table_chunk_max_tokens": part["max_tokens"],
+                    "oversized_atomic_row": part["oversized_atomic_row"],
                     "parser_name": "gii_xml_cals",
                     "table_section": None,
-                    "rows": rows,
-                    "text": text,
-                    "text_sha256": sha256_str(text),
+                    "rows": part["rows"],
+                    "text": part["text"],
+                    "text_sha256": sha256_str(part["text"]),
                     "confidence": 1.0,
                     "review_status": "pending",
-                    "row_range": {"start": 1, "end": len(rows)} if rows else None,
-                    "table_data": table,
+                    "row_range": (
+                        {"start": row_start, "end": row_end}
+                        if row_start is not None and row_end is not None
+                        else None
+                    ),
                 }
-            )
-            next_table_chunk_sequence_by_unit[table_unit_id] = 2
+                # Preserve the legacy raw contract for unchanged tables without
+                # duplicating the complete logical table into every split part.
+                if not part["was_split"]:
+                    chunk["table_data"] = table
+                chunks.append(chunk)
+            next_table_chunk_sequence_by_unit[table_unit_id] = len(table_parts) + 1
 
         for footnote_index, footnote in enumerate(footnotes, 1):
             sequence += 1

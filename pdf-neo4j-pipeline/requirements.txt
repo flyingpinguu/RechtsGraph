@@ -1,3 +1,4 @@
 pypdf
 pymupdf
 pytest
+tiktoken==0.13.0

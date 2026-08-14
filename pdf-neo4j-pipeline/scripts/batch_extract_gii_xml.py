@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 TOOL_NAME = "batch_extract_gii_xml"
 TOOL_VERSION = "1.2.0"
 MANIFEST_SCHEMA_VERSION = "1.0"
-EXPECTED_EXTRACTOR_VERSION = "1.0.0"
+EXPECTED_EXTRACTOR_VERSION = "1.1.0"
 EXPECTED_ALIGNMENT_VERSION = "2.0.0"
 SUCCESS_SOURCE_STATUSES = frozenset({"ok", "ok_existing"})
 

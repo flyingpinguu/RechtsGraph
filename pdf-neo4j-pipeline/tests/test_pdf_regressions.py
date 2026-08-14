@@ -10,13 +10,21 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PROJECT_ROOT.parent
 PDF_DIR = REPO_ROOT / "abfall_pdfs"
+PDF_CORPUS_DIR = REPO_ROOT / "gesetze_im_internet_pdfs"
 
 DOCS = {
-    "ersatzbaustoffv": "06_ErsatzbaustoffV.pdf",
-    "krwg": "01_KrWG.pdf",
-    "depv": "07_DepV.pdf",
-    "efbv": "14_EfbV.pdf",
+    "ersatzbaustoffv": (PDF_DIR / "06_ErsatzbaustoffV.pdf", PDF_CORPUS_DIR / "E/0202_ersatzbaustoffv.pdf"),
+    "krwg": (PDF_DIR / "01_KrWG.pdf", PDF_CORPUS_DIR / "K/0206_krwg.pdf"),
+    "depv": (PDF_DIR / "07_DepV.pdf", PDF_CORPUS_DIR / "D/0068_depv.pdf"),
+    "efbv": (PDF_DIR / "14_EfbV.pdf", PDF_CORPUS_DIR / "E/0038_efbv.pdf"),
 }
+
+
+def resolve_pdf(candidates):
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    pytest.fail("missing PDF regression fixture: " + ", ".join(str(path) for path in candidates))
 
 
 def run_cmd(args):
@@ -48,7 +56,8 @@ def regression_outputs(tmp_path_factory):
 
     raw_paths = {}
     graph_paths = {}
-    for key, pdf_name in DOCS.items():
+    for key, pdf_candidates in DOCS.items():
+        pdf_path = resolve_pdf(pdf_candidates)
         raw_path = raw_dir / f"{key}_raw.json"
         graph_path = graph_dir / f"{key}_content_graph.json"
         run_cmd(
@@ -59,7 +68,7 @@ def regression_outputs(tmp_path_factory):
                 str(raw_path),
                 "--pages-dir",
                 str(pages_dir),
-                str(PDF_DIR / pdf_name),
+                str(pdf_path),
             ]
         )
         run_cmd(

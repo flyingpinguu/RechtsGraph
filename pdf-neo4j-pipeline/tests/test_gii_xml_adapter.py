@@ -123,12 +123,42 @@ def test_adapter_preserves_article_context_and_prefers_annex_enbez(tmp_path):
     assert "Hervorhebung" in subsection_chunks[1]["text"]
 
 
+def test_title_footnote_marker_is_not_part_of_document_global_key(tmp_path):
+    source = """<?xml version="1.0" encoding="UTF-8"?>
+    <dokumente doknr="BJNRFOOTTITLE">
+      <norm doknr="BJNRFOOTTITLE">
+        <metadaten>
+          <jurabk>FootTitleG</jurabk><amtabk>FootTitleG</amtabk>
+          <kurzue>Alkoholsteuergesetz<FnR ID="fn-title"/></kurzue>
+          <langue>Alkoholsteuergesetz<FnR ID="fn-title"/></langue>
+        </metadaten>
+        <textdaten><fussnoten><Footnotes>
+          <Footnote ID="fn-title" FnZ="2">Titelhinweis.</Footnote>
+        </Footnotes></fussnoten></textdaten>
+      </norm>
+      <norm doknr="BJNRFOOTTITLEP1">
+        <metadaten><jurabk>FootTitleG</jurabk><enbez>§ 1</enbez></metadaten>
+        <textdaten><text><Content><P>Regelung.</P></Content></text></textdaten>
+      </norm>
+    </dokumente>
+    """
+
+    document, _issues = extract_document_from_xml(write_xml(tmp_path, source))
+
+    assert document["metadata"]["short_title"] == "Alkoholsteuergesetz[2]"
+    assert document["document_global_key"] == "alkoholsteuergesetz"
+    assert document["structural_units"][0]["global_key"].startswith(
+        "alkoholsteuergesetz_"
+    )
+
+
 def test_adapter_merges_horizontal_xml_table_continuations(tmp_path):
     document, _issues = extract_document_from_xml(write_xml(tmp_path))
     tables = [unit for unit in document["structural_units"] if unit["unit_type"] == "table"]
     assert len(tables) == 1
     table = tables[0]
     assert table["label"] == "Tabelle 1"
+    assert table["global_key"].endswith("_anlage_19_tabelle_1")
     assert table["columns"] == ["Parameter", "Dim.", "A", "B"]
     assert table["row_count"] == 2
     assert table["table_data"]["merge_mode"] == "horizontal"

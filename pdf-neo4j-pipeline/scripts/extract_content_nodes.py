@@ -28,6 +28,7 @@ XML_DOCUMENT_METADATA_FIELDS = (
     "source_format",
     "extractor",
     "official_abbreviation",
+    "jurabk",
     "gii_document_number",
     "gii_build_date",
     "source_xml_sha256",
@@ -35,12 +36,24 @@ XML_DOCUMENT_METADATA_FIELDS = (
     "source_package_kind",
     "source_package_sha256",
     "pdf_alignment_status",
+    "base_celex",
+    "consolidated_celex",
+    "consolidation_date",
+    "descriptor",
+    "descriptor_label",
+    "legal_value",
+    "legal_status",
+    "in_force",
+    "citation_aliases",
+    "citation_alias_keys",
+    "source_url",
+    "source_cellar_uri",
 )
 
 XML_STRUCTURED_FIELDS = {
+    "header_matrix",
     "preformatted_blocks",
     "structured_lists",
-    "table_data",
 }
 
 
@@ -189,6 +202,15 @@ def document_node(document: Dict[str, Any]) -> Dict[str, Any]:
         for field in XML_DOCUMENT_METADATA_FIELDS:
             if metadata.get(field) is not None:
                 props[field] = clean_value(metadata[field])
+        if not props.get("citation_alias_keys") and metadata.get("citation_aliases"):
+            alias_keys = {
+                re.sub(r"[^a-z0-9]+", "_", str(alias).lower()).strip("_")
+                for alias in metadata.get("citation_aliases") or []
+                if alias
+            }
+            props["citation_alias_keys"] = "|{}|".format(
+                "|".join(sorted(key for key in alias_keys if key))
+            )
         props["metadata_json"] = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
     return {
         "id": document["document_id"],
@@ -264,6 +286,13 @@ def chunk_node(chunk: Dict[str, Any]) -> Dict[str, Any]:
             "table_section",
             "columns",
             "column_header_text",
+            "table_title",
+            "table_part_index",
+            "table_part_count",
+            "table_chunk_token_count",
+            "table_chunk_token_encoding",
+            "table_chunk_max_tokens",
+            "oversized_atomic_row",
             "parser_name",
             "confidence",
             "review_status",
