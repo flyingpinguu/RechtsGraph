@@ -1,4 +1,6 @@
-# GII XML/PDF Neo4j Pipeline
+# RechtsGraph
+
+German and EU law as a knowledge graph.
 
 Deterministische Normtext-Pipeline fuer die erste GraphRAG-Schicht.
 
