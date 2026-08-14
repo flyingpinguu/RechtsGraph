@@ -116,9 +116,6 @@ PDF ist kein XML-Extraktionsfehler. Die acht nachweislich nur als PDF
 vorliegenden Eintraege werden im Downloader als `xml_unavailable`, nicht als
 Prozessfehler, ausgewiesen und danach vom engen PDF-Fallback uebernommen.
 
-Der ausfuehrliche Entscheidungs- und Implementierungsnachweis steht in
-`../XML_MIGRATION_PLAN.md`.
-
 ## EUR-Lex-Konsolidierungen aus Cellar
 
 Der deutsche konsolidierte EU-Rechtsbestand wird separat aus Cellar bezogen.
@@ -199,7 +196,7 @@ Die PDF-Extraktion bleibt fuer Quellen ausserhalb des GII-XML-Korpus und als
 expliziter Fallback erhalten:
 
 ```bash
-cd /Users/christinck/Documents/graph_database/pdf-neo4j-pipeline
+cd pdf-neo4j-pipeline
 ./.venv/bin/python scripts/extract_normtext.py \
   --output output/raw_versatzv_current.json \
   ../abfall_pdfs/09_VersatzV.pdf
