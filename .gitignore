@@ -28,13 +28,8 @@ eurlex_consolidated_de/*
 !eurlex_consolidated_de/.gitkeep
 LEG_DE_FMX_*.zip
 
-# Local development knowledge (kept outside the public repository)
-/CONTENT_NODE_MODEL.md
-/LEGAL_DOMAIN_TAXONOMY.md
+# Local Neo4j operations cheat sheet (kept outside the public repository)
 /NEO4J_QUERIES.md
-/NODE_PROPERTY_REVIEW.md
-/REFERENCE_RELATION_MODEL.md
-/XML_MIGRATION_PLAN.md
 
 # Local editor/OS noise
 .idea/
