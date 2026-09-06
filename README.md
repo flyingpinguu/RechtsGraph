@@ -13,6 +13,10 @@ Das Ergebnis ist eine belastbare Datenschicht für juristische Recherche,
 Netzwerk- und Folgenanalysen, spezialisierte Suchsysteme und – als eine mögliche
 Anwendung – GraphRAG.
 
+![Übersicht eines größeren Ausschnitts des RechtsGraph mit vernetzten Rechtsakten und Struktureinheiten](pictures/Screenshot%202026-08-14%20at%2018.05.40.png)
+
+*Ein Ausschnitt des Knowledge Graph in Neo4j: Rechtsakte und ihre Struktureinheiten bilden ein dicht verknüpftes Netzwerk.*
+
 ## Die Idee
 
 Gesetze werden dokumentweise veröffentlicht, funktionieren aber als Netzwerk.
@@ -68,9 +72,12 @@ flowchart LR
 Für den deutschen Bestand nutzt die Pipeline primär die XML-Fassungen von
 *Gesetze im Internet*. PDFs ergänzen Seitenbelege und dienen als visuelle
 Referenz. Konsolidierte EU-Rechtsakte werden über Cellar bezogen und aus Formex
-4 verarbeitet. Beide Quellen werden in dasselbe Modell aus `Document`,
-`StructuralUnit` und `Chunk` übersetzt, bevor Referenzen aufgelöst und die Daten
-nach Neo4j exportiert werden.
+4 verarbeitet. Eindeutig referenzierte EU-Verordnungen, für die keine
+konsolidierte Fassung im Bestand liegt, ergänzt die Standardpipeline aus den
+amtlichen Originalfassungen; andere externe Dokumentarten bleiben außen vor.
+Beide Quellen werden in dasselbe Modell aus `Document`, `StructuralUnit` und
+`Chunk` übersetzt, bevor Referenzen aufgelöst und die Daten nach Neo4j
+exportiert werden.
 
 ## Was technisch interessant ist
 
@@ -101,9 +108,9 @@ Quelle zeigt.
 
 Downloads und Verarbeitungsschritte sind resumierbar, IDs stabil und Exporte
 idempotent. Korpusaudits prüfen unter anderem Hierarchie, Eindeutigkeit,
-Quellbezug und Tabellenstruktur. Die automatisierte Testsuite umfasst aktuell
-178 Tests, darunter Regressionen für besonders schwierige Gesetzestabellen und
-die Kompatibilität der deutschen und europäischen Parser.
+Quellbezug und Tabellenstruktur. Mehr als 200 automatisierte Tests decken unter
+anderem besonders schwierige Gesetzestabellen und die Kompatibilität der
+deutschen und europäischen Parser ab.
 
 ## Größenordnung
 
@@ -130,6 +137,10 @@ Dasselbe Modell erlaubt Traversierungen über mehrere Ebenen: vom Dokument zum
 Artikel, vom Artikel zum Textabschnitt und von dort zu einer referenzierten Norm
 in einem anderen Rechtsakt.
 
+![Detailansicht des RechtsGraph mit Struktureinheiten und den Beziehungen CONTAINS_UNIT, NEXT_UNIT und REFERS_TO](pictures/Screenshot%202026-08-14%20at%2018.36.54.png)
+
+*Im Detail werden die innere Struktur eines Rechtsakts und seine Verweise sichtbar.*
+
 ## Repository
 
 ```text
@@ -140,13 +151,14 @@ RechtsGraph/
 │   ├── tests/                # Unit-, Integrations- und Regressionstests
 │   └── requirements.txt
 ├── gesetze_im_internet_pdfs/ # Platzhalter für den lokalen GII-PDF-Korpus
-└── eurlex_consolidated_de/   # Platzhalter für lokale Cellar-Downloads
+├── eurlex_consolidated_de/   # Platzhalter für lokale Cellar-Downloads
+└── external_documents/      # Register und lokale amtliche Originalfassungen
 ```
 
 Die wichtigsten Bausteine sind:
 
 - ein GII-Adapter für deutsches XML inklusive CALS-Tabellen,
-- ein Formex-Adapter für konsolidiertes EU-Recht,
+- ein Formex-Adapter für konsolidiertes EU-Recht und Originalverordnungen,
 - eine gemeinsame Content-Graph-Repräsentation,
 - dokumentübergreifende Referenzauflösung,
 - JSON-, CSV- und Cypher-Exporte für Neo4j,
@@ -173,10 +185,44 @@ generierte Korpora bleiben bewusst außerhalb der Versionsverwaltung; die
 erwarteten lokalen Quellverzeichnisse sind im Repository als Platzhalter
 angelegt.
 
+### Optionaler Zugriff für Agenten
+
+Ein schlanker MCP-Server stellt den lokalen Korpus bestehenden Agenten-Hosts
+wie Codex als Werkzeugsammlung bereit. Er ist kein eigener Agenten-Loop und
+erzwingt keine feste Recherchelogik: Der aufrufende Agent kann Dokumente und
+Normeinheiten gezielt öffnen, Volltextkontext suchen, Verweiskanten erkunden
+und diese Quellen frei mit eigener Webrecherche kombinieren.
+
+Der Suchindex wird aus den kanonischen JSON-Korpora abgeleitet; XML, JSON und
+Neo4j bleiben die maßgeblichen Datenquellen. Sonderdokumente ohne eigenen
+Strukturparser werden nur nach expliziter Auswahl seiten- und tokenbewusst als
+PDF-Passagen aufgenommen.
+
+```bash
+python3.11 -m venv .venv-mcp
+./.venv-mcp/bin/python -m pip install -r requirements-mcp.txt
+./.venv-mcp/bin/python scripts/build_retrieval_index.py \
+  --external-document-id adr_2025 \
+  --external-document-id adr_2025_changes_de
+./.venv-mcp/bin/python -m rechtsgraph_mcp.server
+```
+
+Ein lokaler Agent Debugger setzt den MCP-Server über den Codex App Server in
+einen vollständigen Rechercheloop ein. Er zeigt Modellrunden, Toolpfade,
+Token- und Cacheverbrauch, Resultatgrößen und automatische Bloat-Hinweise. Runs
+werden unter `output/debug_ui/runs` persistent protokolliert und bleiben nach
+einem Neustart auswertbar.
+
+```bash
+cd pdf-neo4j-pipeline/debug_ui
+npm start                 # schlankes RechtsGraph-Rechercheprofil
+npm run start:full        # vollständiges Codex-Profil für Entwicklung
+```
+
 ## Tech Stack
 
-`Python` · `XML / DTD` · `Formex 4` · `JSON` · `Neo4j` · `Cypher` ·
-`PyMuPDF` · `pypdf` · `pytest`
+`Python` · `XML / DTD` · `Formex 4` · `JSON` · `SQLite FTS5` · `MCP` ·
+`Neo4j` · `Cypher` · `PyMuPDF` · `pypdf` · `pytest`
 
 ## Nächste Schritte
 
