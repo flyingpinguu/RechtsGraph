@@ -35,6 +35,10 @@ XML_DOCUMENT_METADATA_FIELDS = (
     "source_xml_name",
     "source_package_kind",
     "source_package_sha256",
+    "source_file_path",
+    "source_file_sha256",
+    "eurlex_original_extractor_version",
+    "text_extraction_backend",
     "pdf_alignment_status",
     "base_celex",
     "consolidated_celex",
@@ -131,6 +135,43 @@ def full_title_from_citation(citation: Optional[str]) -> Optional[str]:
     return cleaned
 
 
+def document_alias_key(value: Any) -> str:
+    """Normalize a document alias exactly like reference target keys."""
+
+    text = str(value or "").casefold()
+    for old, new in {"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss", "§": "para"}.items():
+        text = text.replace(old, new)
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
+
+def grammatical_document_alias_keys(value: Any) -> set[str]:
+    normalized = document_alias_key(value)
+    aliases = {normalized} if normalized else set()
+    parts = normalized.split("_")
+    if len(parts) < 2:
+        return aliases
+    first, legal_form = parts[0], parts[-1]
+    replacement = None
+    if legal_form.endswith(("gesetz", "gesetzbuch")):
+        if first.endswith("en"):
+            replacement = first[:-2] + "es"
+        elif first.endswith("es"):
+            replacement = first[:-2] + "en"
+    elif legal_form.endswith(("verordnung", "ordnung")):
+        if first.endswith("en"):
+            replacement = first[:-2] + "e"
+        elif first.endswith("e"):
+            replacement = first[:-1] + "en"
+    elif legal_form.endswith("vertrag"):
+        if first.endswith("en"):
+            replacement = first[:-2] + "er"
+        elif first.endswith("er"):
+            replacement = first[:-2] + "en"
+    if replacement:
+        aliases.add("_".join([replacement, *parts[1:]]))
+    return aliases
+
+
 def pick_properties(source: Dict[str, Any], fields: Iterable[str]) -> Dict[str, Any]:
     props: Dict[str, Any] = {}
     for field in fields:
@@ -202,16 +243,38 @@ def document_node(document: Dict[str, Any]) -> Dict[str, Any]:
         for field in XML_DOCUMENT_METADATA_FIELDS:
             if metadata.get(field) is not None:
                 props[field] = clean_value(metadata[field])
-        if not props.get("citation_alias_keys") and metadata.get("citation_aliases"):
-            alias_keys = {
-                re.sub(r"[^a-z0-9]+", "_", str(alias).lower()).strip("_")
-                for alias in metadata.get("citation_aliases") or []
-                if alias
-            }
-            props["citation_alias_keys"] = "|{}|".format(
-                "|".join(sorted(key for key in alias_keys if key))
-            )
         props["metadata_json"] = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+    else:
+        metadata = {}
+    alias_values: List[Any] = [
+        document.get("document_key"),
+        document.get("document_global_key"),
+        document.get("global_key"),
+        document.get("title"),
+        document.get("canonical_citation"),
+        document.get("citation_prefix"),
+        document.get("abbreviation"),
+        document.get("full_citation"),
+        full_title,
+        metadata.get("short_title"),
+        metadata.get("official_abbreviation"),
+        metadata.get("jurabk"),
+        metadata.get("base_celex"),
+        metadata.get("consolidated_celex"),
+    ]
+    citation_aliases = metadata.get("citation_aliases") or []
+    if isinstance(citation_aliases, str):
+        citation_aliases = [citation_aliases]
+    alias_values.extend(citation_aliases)
+    existing_alias_keys = str(props.get("citation_alias_keys") or "").strip("|").split("|")
+    alias_values.extend(existing_alias_keys)
+    alias_keys = set()
+    for alias in alias_values:
+        values = alias if isinstance(alias, list) else [alias]
+        for value in values:
+            alias_keys.update(grammatical_document_alias_keys(value))
+    if alias_keys:
+        props["citation_alias_keys"] = "|{}|".format("|".join(sorted(alias_keys)))
     return {
         "id": document["document_id"],
         "labels": ["Document"],
@@ -580,10 +643,19 @@ def build_graph(raw: Dict[str, Any], source_path: str) -> Dict[str, Any]:
     for rel in all_relationships:
         counts_by_type[rel["type"]] = counts_by_type.get(rel["type"], 0) + 1
 
+    source_raw_sha256 = None
+    if source_path and os.path.isfile(source_path):
+        digest = hashlib.sha256()
+        with open(source_path, "rb") as source_handle:
+            for block in iter(lambda: source_handle.read(1024 * 1024), b""):
+                digest.update(block)
+        source_raw_sha256 = digest.hexdigest()
+
     return {
         "schema_version": SCHEMA_VERSION,
         "phase": "content_nodes",
         "source_raw_json": source_path,
+        "source_raw_sha256": source_raw_sha256,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "counts": {
             "nodes": len(all_nodes),

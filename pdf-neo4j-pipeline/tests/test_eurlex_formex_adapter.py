@@ -60,6 +60,21 @@ FORMEX = """<?xml version="1.0" encoding="utf-8"?>
 </CONS.ACT>
 """
 
+ORIGINAL_FORMEX = """<?xml version="1.0" encoding="utf-8"?>
+<ACT>
+  <BIB.INSTANCE><DATE ISO="20170321">20170321</DATE></BIB.INSTANCE>
+  <TITLE><TI><P>Verordnung (EU) 2017/492 der Kommission</P></TI></TITLE>
+  <PREAMBLE><PREAMBLE.INIT>DIE EUROPÄISCHE KOMMISSION —</PREAMBLE.INIT></PREAMBLE>
+  <ENACTING.TERMS>
+    <ARTICLE IDENTIFIER="001">
+      <TI.ART>Artikel 1</TI.ART>
+      <ALINEA><P>Die Verordnung wird geändert.</P></ALINEA>
+    </ARTICLE>
+  </ENACTING.TERMS>
+  <FINAL><P>Diese Verordnung gilt unmittelbar.</P></FINAL>
+</ACT>
+"""
+
 
 def record():
     return {
@@ -81,6 +96,14 @@ def package(tmp_path):
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("CL2016R0679DE0000010.xml", FORMEX)
         archive.writestr("CL2016R0679DE0000010.doc.xml", "<DOC/>")
+    return path
+
+
+def original_package(tmp_path):
+    path = tmp_path / "original.fmx4.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("L_2017.xml", ORIGINAL_FORMEX)
+        archive.writestr("L_2017.doc.xml", "<DOC/>")
     return path
 
 
@@ -119,6 +142,27 @@ def test_adapter_emits_shared_contract_and_addressable_articles(tmp_path):
     assert table_chunk["rows"][1]["Kategorien / Merkmal"] == "pH"
     assert table["table_data"]["row_count"] == 2
     assert any(chunk["chunk_type"] == "footnote" for chunk in chunks)
+
+
+def test_adapter_accepts_original_formex_acts(tmp_path):
+    original_record = {
+        "base_celex": "32017R0492",
+        "consolidated_celex": "32017R0492",
+        "descriptor": "R",
+        "local_path": "documents/eu_referenced_originals/32017R0492.fmx4.zip",
+        "download_url": "https://publications.europa.eu/resource/celex/32017R0492",
+    }
+    payload = extract_package(original_package(tmp_path), original_record)
+    document = payload["documents"][0]
+
+    assert document["metadata"]["source_format"] == "eurlex_formex_original"
+    assert document["metadata"]["source_package_kind"] == "fmx4_original_zip"
+    assert document["date_enacted"] == "20170321"
+    assert document["title"] == "Verordnung (EU) 2017/492 der Kommission"
+    article = next(
+        unit for unit in document["structural_units"] if unit["unit_type"] == "article"
+    )
+    assert article["global_key"] == "celex_32017r0492_art_1"
 
 
 def _german_raw():
@@ -212,6 +256,106 @@ def test_citation_aliases_cover_old_and_new_number_order():
     assert "Verordnung (EU) 2008/440" in aliases
 
 
+def test_citation_aliases_cover_legacy_two_digit_years():
+    aliases = eu_citation_aliases("31983R0918", "R")
+
+    assert "Verordnung (EWG) Nr. 918/83" in aliases
+    assert "Verordnung 83/918/EWG" in aliases
+
+
+def test_eu_identifier_normalization_does_not_expand_two_digit_act_number():
+    assert reference_relations.eu_act_key("Richtlinie", "2003/87/EG") == (
+        "richtlinie_2003_87_eg"
+    )
+    assert reference_relations.eu_act_key("Verordnung", "(EWG) Nr. 918/83") == (
+        "verordnung_ewg_nr_918_1983"
+    )
+    assert reference_relations.eu_act_key("Verordnung", "(EU) Nr. 10/2011") == (
+        "verordnung_eu_nr_10_2011"
+    )
+
+
+def test_legacy_two_digit_eu_year_resolves_to_consolidated_document(tmp_path):
+    eu_raw = extract_package(package(tmp_path), record())
+    eu_document = eu_raw["documents"][0]
+    eu_document["document_global_key"] = "celex_31991l0676"
+    eu_document["global_key"] = "celex_31991l0676"
+    eu_document["metadata"]["citation_aliases"] = eu_citation_aliases(
+        "31991L0676", "L"
+    )
+    article = next(
+        unit for unit in eu_document["structural_units"] if unit["unit_type"] == "article"
+    )
+    article["global_key"] = "celex_31991l0676_art_6"
+    for chunk in eu_document["chunks"]:
+        if chunk["unit_id"] == article["unit_id"]:
+            chunk["global_key"] = "celex_31991l0676_art_6_text"
+
+    de_raw = _german_raw()
+    de_raw["documents"][0]["chunks"][0]["text"] = (
+        "Nach Artikel 6 der Richtlinie 91/676/EWG ist dies zulässig."
+    )
+    merged = {
+        "nodes": content_nodes.build_graph(de_raw, "de.json")["nodes"]
+        + content_nodes.build_graph(eu_raw, "eu.json")["nodes"],
+        "relationships": content_nodes.build_graph(de_raw, "de.json")["relationships"]
+        + content_nodes.build_graph(eu_raw, "eu.json")["relationships"],
+    }
+
+    result = reference_relations.ReferenceExtractor(copy.deepcopy(merged)).extract()
+    exact = next(
+        rel
+        for rel in result["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["properties"].get("mention_text", "").startswith("Artikel 6")
+    )
+
+    assert exact["properties"]["resolution_status"] == "resolved"
+    assert exact["properties"]["resolved_target_global_key"] == "celex_31991l0676_art_6"
+
+
+def test_explicit_delegated_regulation_wins_over_generic_law_name(tmp_path):
+    raw = _german_raw()
+    raw["documents"][0]["chunks"][0]["text"] = (
+        "Artikel 2 der Delegierten Verordnung (EU) 2020/1818 ist anzuwenden."
+    )
+    graph = content_nodes.build_graph(raw, "de.json")
+
+    result = reference_relations.ReferenceExtractor(copy.deepcopy(graph)).extract()
+    chunk_references = [
+        rel
+        for rel in result["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["start_node_id"] == "chunk_testg_para_1__doc_de_test"
+    ]
+
+    assert len(chunk_references) == 1
+    assert chunk_references[0]["properties"]["requested_target_global_key"] == (
+        "verordnung_eu_2020_1818_art_2"
+    )
+
+
+def test_generic_delegated_regulation_remains_unresolved_without_identifier():
+    raw = _german_raw()
+    raw["documents"][0]["chunks"][0]["text"] = (
+        "Artikel 2 der Delegierten Verordnung ist anzuwenden."
+    )
+    graph = content_nodes.build_graph(raw, "de.json")
+
+    result = reference_relations.ReferenceExtractor(copy.deepcopy(graph)).extract()
+    reference = next(
+        rel
+        for rel in result["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["start_node_id"] == "chunk_testg_para_1__doc_de_test"
+    )
+
+    assert reference["properties"]["resolution_status"] == "unresolved"
+    assert reference["properties"]["requested_target_global_key"] == (
+        "delegierten_verordnung_art_2"
+    )
+
+
 def test_neo4j_export_keeps_exact_reference_target_key_and_repairs_stale_edges(tmp_path):
     assert "requested_target_global_key" in neo4j_cypher.NEO4J_NODE_PROPERTY_ALLOWLIST["ReferenceTarget"]
 
@@ -220,6 +364,9 @@ def test_neo4j_export_keeps_exact_reference_target_key_and_repairs_stale_edges(t
     cypher = output.read_text(encoding="utf-8")
 
     assert "coalesce(rt.requested_target_global_key, rt.global_key) AS requested_key" in cypher
+    assert "size(documents) = 1" in cypher
+    assert "all(candidate IN documents WHERE candidate.base_celex IS NOT NULL)" in cypher
+    assert "WHEN d.consolidated_celex STARTS WITH '0' THEN 0 ELSE 1" in cypher
     assert "OPTIONAL MATCH (rt)-[obsolete:`RESOLVES_TO`]" in cypher
     assert "WHERE NOT exact:`ReferenceTarget`" in cypher
     assert "Repair stale document-level edges" in cypher

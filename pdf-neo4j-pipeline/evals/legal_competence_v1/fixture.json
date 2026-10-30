@@ -1,0 +1,325 @@
+{
+  "schemaVersion": 2,
+  "benchmarkId": "rechtsgraph-legal-competence-v1",
+  "title": "RechtsGraph benchmark for useful legal work",
+  "frozenAsOf": "2026-09-15",
+  "referenceStatus": "source-grounded-development-set; not yet human-calibrated",
+  "notes": "Twelve realistic German and EU legal assignments. Candidate answers are graded on legal work quality only; tool use is diagnostic.",
+  "suites": {
+    "smoke": [
+      "case_01_representation",
+      "document_03_retention_memo_audit",
+      "draft_02_laptop_demand"
+    ],
+    "full": [
+      "case_01_representation",
+      "case_02_factoring",
+      "case_03_freizuegigkeit",
+      "case_04_criminal_image",
+      "research_01_ai_act_recruiting",
+      "research_02_gdpr_breach",
+      "document_01_employment_contract",
+      "document_02_nda_comparison",
+      "document_03_retention_memo_audit",
+      "draft_01_digital_product_email",
+      "draft_02_laptop_demand",
+      "triage_01_employment_dismissal"
+    ],
+    "quick": [
+      "case_02_factoring",
+      "research_01_ai_act_recruiting",
+      "document_01_employment_contract",
+      "draft_02_laptop_demand",
+      "triage_01_employment_dismissal"
+    ],
+    "stability": [
+      "case_01_representation",
+      "document_03_retention_memo_audit",
+      "draft_02_laptop_demand"
+    ],
+    "protected": [
+      "research_02_gdpr_breach",
+      "document_02_nda_comparison",
+      "draft_01_digital_product_email"
+    ]
+  },
+  "cases": [
+    {
+      "id": "case_01_representation",
+      "family": "case_analysis",
+      "domain": [
+        "German civil law",
+        "representation"
+      ],
+      "artifact": "claim-by-claim legal opinion",
+      "maxWords": 900,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "published-solution",
+      "developmentPartition": "known_solution",
+      "sourceCaseId": "pilot_01",
+      "prompt": "Deutschland. G und F sind Gebrauchtwagenhändlerinnen. G beschäftigte A laut Arbeitsvertrag hauptsächlich zum Pkw-Einkauf. Ein halbes Jahr später teilte sie etwa 20 regionalen Händlern, darunter F, schriftlich mit, A dürfe für sie Gebrauchtwagen aller Art kaufen; F archivierte das Schreiben. Drei Jahre später beschränkte G A nach Streit über die Einkaufspolitik auf den Verkauf, widerrief ihm gegenüber vorsorglich jede Vollmacht und erlaubte Verkäufe nur nach Rücksprache. Dies schrieb sie auch ihren Geschäftspartnern. Das Schreiben lag am Morgen des 3. Juli in Fs Postfilialfach. F vergaß es, erhielt es am 4. Juli auf den Schreibtisch und las es am 6. Juli. Am 5. Juli kaufte A, um Gs Vertrauen durch günstige Einkäufe zurückzugewinnen, bei F einen VW Beetle für ausgehandelte 8.200 Euro. Er unterschrieb nur mit seinem Namen; F kannte ihn aus etwa zwölf jährlichen Einkäufen als Gs Mitarbeiter. Danach kaufte er bei der H-GmbH, die mit G noch nie gehandelt hatte, einen Smart für 5.500 Euro. Er stellte sich als Gs Einkäufer vor; Hs Geschäftsführer vertraute wegen As Sachkunde und Auftreten sowie Gs Ruf. Nach Rechnungseingang lehnte G beide Geschäfte sofort gegenüber A ab. Können F und H von G oder zumindest von A Zahlung der jeweiligen Kaufpreise verlangen?\n\nTESTBEDINGUNG: Suche nicht nach der konkreten Übungsaufgabe, markanten Textteilen oder ihrer Musterlösung. Die Recherche nach allgemeinen Gesetzen und Rechtsprechung ist erlaubt. Beurteile den angegebenen Sachverhalt nach der Rechtslage am 15. September 2026 auf Deutsch in höchstens 900 Wörtern. Trenne die vier möglichen Ansprüche, belege zentrale Rechtsaussagen und nenne verbleibende Unsicherheiten knapp."
+    },
+    {
+      "id": "case_02_factoring",
+      "family": "case_analysis",
+      "domain": [
+        "German civil law",
+        "commercial law",
+        "factoring"
+      ],
+      "artifact": "structured legal opinion",
+      "maxWords": 1000,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "published-solution",
+      "developmentPartition": "known_solution",
+      "sourceCaseId": "pilot_02",
+      "prompt": "A betreibt ein im Handelsregister eingetragenes, kaufmännisch eingerichtetes Bauunternehmen; die eingetragene B-GmbH liefert ihm Baustoffe. Ihre beiderseits unterzeichneten Einkaufsbedingungen erlauben B Abtretung oder Dritteinzug nur mit As vorheriger schriftlicher Zustimmung, setzen ein Jahr Zahlungsfrist ab Lieferung und behalten B das Eigentum bis zur Vollzahlung vor. Am 1. Dezember 2024 trat B C per Factoring eine Forderung über 50.000 Euro aus einer Zementmischerlieferung vom 31. Oktober ab. Am 9. Dezember informierte sie A; er widersprach, handelte aber weiter mit B. Am 2. Januar 2025 lieferte B auf Bestellung 20 Tonnen Recycling-Schrott als Unterbau. As Probe vom 3. Januar zeigte stark überhöhtes Arsen. A rügte sofort und verlangte Ersatz. B, die von D nach Vorlage amtlicher Unbedenklichkeitszertifikate gekauft hatte, verweigerte Nacherfüllung. A trat am 1. März zurück und verlangte wegen vollständiger Sperrung seiner Lagerhallen die Abholung. Nach Bs Weigerung ließ er das Material am 1. April für 50.000 Euro entfernen. Am 3. April rechnete A gegenüber B gegen Ansprüche aus früheren Geschäften auf; offen war nur die Forderung vom 31. Oktober. Kurz danach wurde A insolvent. Die Insolvenzverwaltung verweigert C unter Verweis auf die Aufrechnung Leistung. Wegen erwarteter geringer Quote fordert C von B 50.000 Euro. Kann C von B Zahlung verlangen?\n\nTESTBEDINGUNG: Suche nicht nach der konkreten Übungsaufgabe, markanten Textteilen oder ihrer Musterlösung. Die Recherche nach allgemeinen Gesetzen und Rechtsprechung ist erlaubt. Beurteile den Sachverhalt nach der Rechtslage am 15. September 2026 auf Deutsch in höchstens 1.000 Wörtern. Nenne Anspruchsgrundlage, zentrale Normenkette, Gegenargumente und Ergebnis."
+    },
+    {
+      "id": "case_03_freizuegigkeit",
+      "family": "case_analysis",
+      "domain": [
+        "German administrative law",
+        "EU law",
+        "free movement"
+      ],
+      "artifact": "court-oriented admissibility and merits opinion",
+      "maxWords": 1400,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "published-solution",
+      "developmentPartition": "known_solution",
+      "sourceCaseId": "pilot_03",
+      "prompt": "Deutschland und Unionsrecht. Der Niederländer A lebt an der Grenze und fährt monatlich zum Friseur ins niedersächsische S. Anfang 2025 verbreitet sich weltweit eine neue virale Atemwegserkrankung (A/H16N9/Emsland/1/2025), vor allem durch Tröpfchen und Aerosole. Die WHO bescheinigt pandemisches Potenzial. Verläufe reichen von symptomlos bis tödlich; Inkubation: vier bis fünf Tage. Deutschland und die Niederlande melden Infektionen und Todesfälle; Impfstoff und flächendeckende schnelle Tests fehlen. Deutschland verhängt Kontaktbeschränkungen und verweigert ab 1. März Nichtdeutschen die Einreise, außer bei Durchreise, Berufspendeln, Warenverkehr oder wichtigem Grund. Am Montag, 3. März, verweigert die zuständige Bundespolizei dem nicht erkrankten, symptomfreien A wegen seines Friseurbesuchs die Einreise nach § 6 FreizügG/EU. Am 10. März fallen die Beschränkungen weg. A erhebt am 20. März beim zuständigen Verwaltungsgericht Feststellungsklage. Er rügt pauschale Unionsbürgerabweisung, Staatsangehörigkeitsdiskriminierung, die niederländische Abweichung und dass § 6 epidemisches Potenzial verlange, die WHO aber nur pandemisches bescheinige. Die Behörde verweist auf § 6 Abs. 1 FreizügG/EU, die Gleichbehandlung aller Ausländer, den entbehrlichen Reisezweck, staatlichen Gesundheitsschutz und darauf, dass Deutschen die Einreise nicht verboten werden könne. Hat As Klage Aussicht auf Erfolg? Bearbeitungsvermerk: umfassend, erforderlichenfalls hilfsgutachtlich prüfen. Pandemisch bedeutet hier weltweite Ausbreitung mit hohen Fallzahlen und regelmäßig schweren Verläufen; epidemisch bedeutet örtlich gehäufte Fälle einheitlicher Ursache.\n\nTESTBEDINGUNG: Suche nicht nach der konkreten Übungsaufgabe, markanten Textteilen oder ihrer Musterlösung. Die Recherche nach allgemeinen Gesetzen und Rechtsprechung ist erlaubt. Prüfe nach der Rechtslage am 15. September 2026 auf Deutsch in höchstens 1.400 Wörtern und trenne Zulässigkeit und Begründetheit."
+    },
+    {
+      "id": "case_04_criminal_image",
+      "family": "case_analysis",
+      "domain": [
+        "German criminal law",
+        "statutory interpretation"
+      ],
+      "artifact": "criminal-law opinion",
+      "maxWords": 1100,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "expert-reference-solution",
+      "developmentPartition": "known_solution",
+      "sourceCaseId": "BenGER Benchathon criminal task 1",
+      "prompt": "B trainiert im Kölner Grüngürtel für einen Marathon und trägt eine schwarze, enganliegende Sportleggings. Der ältere H folgt ihr etwa 100 Meter langsam mit dem Fahrrad, fährt dann voraus, hält an und fotografiert B von hinten, als sie an ihm vorbeijoggt. Auf dem Foto ist insbesondere ihr von der Leggings bedecktes Gesäß erkennbar. B bemerkt dies und verlangt die Löschung. H erwidert, wer sich wie eine ‚figurbetonte Schlampe‘ anziehe, müsse mit Fotos rechnen. Am Abend berichtet H seinem Freund K im Vereinsheim davon. K kritisiert das Verhalten scharf. Aus Rache ruft H über den gewöhnlichen Festnetzanschluss der Polizei an und behauptet wider besseres Wissen, K werde in Kürze stark alkoholisiert mit dem Auto heimfahren. Die Polizei entsendet daraufhin zwei Beamte, um wegen eines Verdachts nach § 316 StGB zu ermitteln.\n\nPrüfe die Strafbarkeit des H. Alle erforderlichen Strafanträge sind gestellt. Auf §§ 145, 184k und 201a StGB wird hingewiesen. Unterstelle außerdem, dass folgende formell verfassungsgemäß zustande gekommene Vorschrift vor dem Geschehen in Kraft getreten ist: ‚§ 184m StGB – Verletzung des Intimbereichs durch voyeuristische Bildaufnahmen. (1) Wer in unmittelbarer Nähe zu einer betroffenen Person deren freizügige oder bekleidete intime Stellen unbefugt fotografiert, wird mit Freiheitsstrafe bis zu einem Jahr oder mit Geldstrafe bestraft. (2) Intime Stellen sind Genitalien, Gesäß und die weibliche Brust.‘\n\nTESTBEDINGUNG: Die zitierte Vorschrift ist für diesen Fall verbindlich zugrunde zu legen, auch wenn sie in realen Gesetzesquellen nicht auffindbar ist. Suche nicht nach der konkreten Aufgabe, markanten Textteilen oder einer Musterlösung. Prüfe auf Deutsch in höchstens 1.100 Wörtern, gegliedert nach Tatkomplexen, und belege nur die realen allgemeinen Rechtsgrundlagen."
+    },
+    {
+      "id": "research_01_ai_act_recruiting",
+      "family": "research_advice",
+      "domain": [
+        "EU AI regulation",
+        "GDPR",
+        "employment law"
+      ],
+      "artifact": "partner memo with implementation plan",
+      "maxWords": 900,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "primary-authority-brief",
+      "developmentPartition": "development",
+      "prompt": "Die deutsche M-GmbH mit 600 Beschäftigten möchte ab 1. November 2026 ein externes SaaS-System einsetzen. Das System analysiert Lebensläufe, erstellt für jede Bewerbung einen Eignungsscore und sortiert Kandidatinnen und Kandidaten für die weitere Prüfung. Eine Recruiterin sieht Score und Begründung, kann die Reihenfolge ändern und entscheidet, wer zum Gespräch eingeladen wird. Der Anbieter vertreibt das unveränderte System unter eigenem Namen. Der Betriebsrat ist vorhanden. Die Geschäftsführung fragt, ob das System nach dem AI Act hochriskant ist, welche Rolle M hat, welche Pflichten am 1. November 2026 bereits gelten beziehungsweise erst später greifen und was vor dem Start praktisch zu tun ist.\n\nErstelle nach der am 15. September 2026 geltenden Rechtslage einen belastbaren internen Vermerk von höchstens 900 Wörtern. Berücksichtige die zu diesem Zeitpunkt bereits beschlossene Änderung der Anwendungsfristen des AI Act, die Abgrenzung von Anbieter und Betreiber, wesentliche AI-Act-Pflichten sowie die wichtigsten Schnittstellen zu DSGVO und Betriebsverfassungsrecht. Trenne geltendes Recht, künftige Pflichten und vorsorgliche Umsetzung. Belege zentrale Aussagen mit überprüfbaren Primärquellen."
+    },
+    {
+      "id": "research_02_gdpr_breach",
+      "family": "research_advice",
+      "domain": [
+        "GDPR",
+        "incident response"
+      ],
+      "artifact": "incident assessment and action plan",
+      "maxWords": 750,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "primary-authority-brief",
+      "developmentPartition": "protected",
+      "prompt": "Am Montag um 14:00 Uhr bemerkt die Personalabteilung der deutschen X-GmbH, dass eine Mitarbeiterin am selben Vormittag versehentlich eine unverschlüsselte Excel-Datei an den richtigen Ansprechpartner eines langjährigen externen IT-Lieferanten geschickt hat. Die Datei enthält Namen, dienstliche E-Mail-Adressen, Monatsgehälter und konkrete Krankheitsdiagnosen von 120 Beschäftigten. Der Empfänger bestätigt um 15:10 Uhr schriftlich, dass nur er die Datei geöffnet, nicht weitergeleitet, anschließend gelöscht und auch aus dem Papierkorb entfernt habe. Der Lieferant verarbeitet diese Daten sonst nicht für X. Es gibt keine Anzeichen missbräuchlicher Nutzung. X ist Verantwortliche und hat eine Datenschutzbeauftragte.\n\nVerfasse für die Datenschutzbeauftragte einen entscheidungsfähigen Incident-Vermerk von höchstens 750 Wörtern: Qualifikation des Vorfalls, Risikobewertung, Meldepflicht an die Aufsicht, Benachrichtigung der Betroffenen, Fristbeginn und -ende, Mindestinhalt einer etwaigen Meldung, sofortige Maßnahmen und Dokumentation. Wo das Ergebnis vertretbar von der Risikobewertung abhängt, benenne die Abwägung statt Scheinsicherheit. Belege zentrale Aussagen mit DSGVO und einschlägigen EDSA-Leitlinien. Rechtsstand: 15. September 2026."
+    },
+    {
+      "id": "document_01_employment_contract",
+      "family": "document_review",
+      "domain": [
+        "German employment law",
+        "standard terms"
+      ],
+      "artifact": "clause review and redraft",
+      "maxWords": 1100,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "expert-annotated-dataset",
+      "developmentPartition": "development",
+      "prompt": "Du prüfst für die Arbeitgeberin den Entwurf eines formularmäßig verwendeten deutschen Arbeitsvertrags für Einstellungen ab Oktober 2026. Beurteile die folgenden fünf Klauseln: (1) ‚Die ersten sechs Monate werden als Probezeit vereinbart, in der das Anstellungsverhältnis für beide Parteien mit einer Frist von zwei Wochen zum Monatsende gekündigt werden kann.‘ (2) ‚Nicht fakturierbare Überstunden sind mit dem Jahreseinkommen abgegolten und werden nicht gesondert vergütet.‘ (3) ‚Die teilweise oder vollständige Abtretung und/oder Verpfändung der Vergütung an Dritte ist ausgeschlossen.‘ (4) ‚Alle Ansprüche, die sich aus dem Arbeitsverhältnis ergeben, sind von den Vertragsparteien binnen drei Monaten seit ihrer Fälligkeit schriftlich geltend zu machen. Lehnt die Gegenseite ab, sind sie binnen eines Monats nach Ablehnung gerichtlich geltend zu machen. Ausgenommen ist nur die Haftung wegen Vorsatzes.‘ (5) ‚Der Arbeitnehmer erhält bei einer Fünf-Tage-Woche 30 Arbeitstage Erholungsurlaub pro Kalenderjahr.‘\n\nErstelle eine praxistaugliche Review-Tabelle mit den Spalten Klausel, Einstufung, konkretes rechtliches Problem, maßgebliche Quelle und Änderungsvorschlag. Unterscheide sicher unwirksame Punkte von bloßen Gestaltungsrisiken. Formuliere für problematische Klauseln eine kurze, rechtlich vorsichtigere Ersatzfassung; beanstande unproblematische Klauseln nicht allein, um möglichst viele Mängel zu nennen. Höchstens 1.100 Wörter; Rechtsstand 15. September 2026."
+    },
+    {
+      "id": "document_02_nda_comparison",
+      "family": "document_review",
+      "domain": [
+        "German commercial law",
+        "trade secrets",
+        "contract drafting"
+      ],
+      "artifact": "recipient-side comparison and compromise clause",
+      "maxWords": 850,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "expert-designed-reference-brief",
+      "developmentPartition": "protected",
+      "prompt": "Die deutsche R-GmbH soll als Informationsempfängerin eine vorformulierte NDA schließen. Es stehen zwei Fassungen zur Diskussion.\n\nFassung A: Vertraulich ist jede gegenwärtige oder künftige Information, die R schriftlich, mündlich, durch Besichtigung oder auf sonstige Weise erhält, unabhängig von Kennzeichnung und Bekanntheit. Nutzung ist ausschließlich für das Projekt zulässig. Die Pflicht gilt zehn Jahre für alle Informationen. Gesetzlich erzwungene Offenlegung ist nur aufgrund eines rechtskräftigen Gerichtsbeschlusses zulässig. Auf Verlangen sind sämtliche Kopien einschließlich unveränderlicher Backups sofort zu löschen. Für jeden Verstoß schuldet R ohne Entlastungsmöglichkeit 100.000 Euro Vertragsstrafe.\n\nFassung B: Vertraulich sind als vertraulich gekennzeichnete schriftliche Informationen und mündliche Informationen, die innerhalb von zehn Werktagen schriftlich als vertraulich bestätigt werden. Ausgenommen sind nachweislich bekannte, unabhängig entwickelte, rechtmäßig von Dritten erhaltene oder öffentlich bekannte Informationen. Nutzung ist ausschließlich für das Projekt zulässig. Die Pflicht gilt drei Jahre; Geschäftsgeheimnisse bleiben geschützt, solange sie die gesetzlichen Voraussetzungen erfüllen. Gesetzlich oder behördlich erforderliche Offenlegung ist im notwendigen Umfang zulässig, möglichst nach vorheriger Mitteilung. Rückgabe oder Löschung erfolgt auf Verlangen; routinemäßige, nicht ohne Weiteres zugängliche Backups dürfen bis zur regulären Überschreibung verbleiben und bleiben geschützt. Eine Vertragsstrafe ist nicht vorgesehen.\n\nFür beide Fassungen ist zusätzlich vorgesehen: ‚Änderungen und Ergänzungen dieser Vereinbarung bedürfen der Textform. Individuelle Abreden der Parteien bleiben unberührt.‘\n\nErstelle für die Geschäftsführung der R-GmbH einen Vergleichs- und Verhandlungsvermerk von höchstens 850 Wörtern. Empfiehl nicht nur A oder B, sondern identifiziere rechtliche und operative Risiken beider Fassungen, priorisiere Verhandlungspunkte und formuliere eine ausgewogene Kompromissklausel. Berücksichtige GeschGehG und eine mögliche AGB-Kontrolle im B2B-Verhältnis, ohne deren Ergebnis zu übertreiben. Beanstande die gemeinsame Bestimmung nur, wenn du dafür einen konkreten, auf den Wortlaut bezogenen Grund hast."
+    },
+    {
+      "id": "document_03_retention_memo_audit",
+      "family": "document_review",
+      "domain": [
+        "GDPR",
+        "commercial retention law",
+        "tax law"
+      ],
+      "artifact": "audit and corrected executive note",
+      "maxWords": 700,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "primary-authority-brief",
+      "developmentPartition": "development",
+      "prompt": "Prüfe folgenden internen Vermerk einer deutschen Handels-GmbH auf materielle Fehler:\n\n‚Ein ehemaliger Kunde hat nach Art. 17 DSGVO die Löschung aller Daten verlangt. Das Recht auf Löschung ist absolut; handels- und steuerrechtliche Fristen dürfen wegen des Vorrangs der DSGVO nicht berücksichtigt werden. Deshalb löschen wir sofort Kundenkonto, Rechnungen, Buchungsbelege, Vertragskorrespondenz und sämtliche Backups. Rechnungen müsste man andernfalls zehn Jahre, Handelsbriefe acht Jahre speichern. Eine Sperrung statt Löschung ist nach der DSGVO unzulässig. Für einen möglichen Rechtsstreit dürfen Daten nie behalten werden, sobald Art. 17 geltend gemacht wurde. Daten, für die weder ein fortbestehender Zweck noch eine gesetzliche Aufbewahrungspflicht besteht, sind nach Prüfung zu löschen. Die Entscheidung und ihre tatsächliche Umsetzung werden dokumentiert.‘\n\nErstelle einen Audit-Vermerk von höchstens 700 Wörtern. Markiere jede fehlerhafte oder zu pauschale Aussage, stelle die Rechtslage am 15. September 2026 richtig und gib einen umsetzbaren Lösch- und Aufbewahrungsplan. Benenne auch die Aussagen, die unverändert stehen bleiben können. Unterscheide Daten- und Dokumentkategorien, Zweckbindung, Zugriffsbeschränkung sowie reguläre Backups. Belege die Kernaussagen mit Primärquellen."
+    },
+    {
+      "id": "draft_01_digital_product_email",
+      "family": "drafting_communication",
+      "domain": [
+        "German consumer law",
+        "digital products"
+      ],
+      "artifact": "client email",
+      "maxWords": 550,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "primary-authority-brief",
+      "developmentPartition": "protected",
+      "prompt": "Eine Verbraucherin hat im Januar 2026 für zwölf Monate eine kostenpflichtige Fitness-App abonniert. Seit sechs Wochen werden die vertraglich zugesagten individuellen Trainingspläne nur noch als leere Seiten angezeigt. Sie meldete den Fehler zweimal über den Support. Der Anbieter antwortete zuletzt, die Funktion werde in diesem Jahr nicht mehr repariert; die übrigen Videos seien weiter nutzbar. Die Kundin möchte wissen, ob sie weiterzahlen muss, den Vertrag beenden und bereits gezahltes Geld zurückverlangen kann. Angaben zum Anteil des Preises, der auf Trainingspläne entfällt, fehlen.\n\nSchreibe eine verständliche, rechtlich belastbare E-Mail an die Kundin mit höchstens 550 Wörtern. Erkläre Optionen, Voraussetzungen, Reichweite einer Erstattung und die nächsten konkreten Schritte. Trenne sichere Aussagen von der wertungsabhängigen Frage, ob der Mangel die Beendigung des ganzen Vertrags rechtfertigt. Nenne die zentralen Normen, aber schreibe für eine juristische Laiin. Rechtsstand 15. September 2026."
+    },
+    {
+      "id": "draft_02_laptop_demand",
+      "family": "drafting_communication",
+      "domain": [
+        "German consumer sales law",
+        "legal correspondence"
+      ],
+      "artifact": "demand letter",
+      "maxWords": 450,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "primary-authority-brief",
+      "developmentPartition": "development",
+      "prompt": "Verbraucher V kaufte am 1. Juni 2026 bei der deutschen Elektronikmarkt E-GmbH im Laden einen neuen Laptop für 1.499 Euro. Seit dem 18. Juni fährt das Gerät nach wenigen Minuten ohne Warnung herunter. V hat den Fehler per Video dokumentiert und das Gerät nicht beschädigt. Der Markt verweist ihn ausschließlich an den Hersteller und lehnt eine eigene Bearbeitung ab. V möchte primär ein mangelfreies Ersatzgerät, hilfsweise sein Geld zurück.\n\nEntwirf ein versandfertiges, sachliches Aufforderungsschreiben von V an die E-GmbH mit höchstens 450 Wörtern. Es soll die richtige Anspruchsgegnerin adressieren, Nacherfüllung rechtlich zutreffend verlangen, eine praktikable Frist setzen, Beweise sichern und weitere Rechte vorbehalten, ohne einen sofortigen Rückzahlungsanspruch zu behaupten, falls dessen Voraussetzungen noch nicht vorliegen. Nenne die tragenden Vorschriften nach der Rechtslage am 15. September 2026. Erfinde keine Adresse, Seriennummer oder bereits erfolgte Kontaktversuche."
+    },
+    {
+      "id": "triage_01_employment_dismissal",
+      "family": "triage_judgment",
+      "domain": [
+        "German employment law",
+        "client intake"
+      ],
+      "artifact": "first-response triage advice",
+      "maxWords": 500,
+      "legalAsOf": "2026-09-15",
+      "referenceStatus": "primary-authority-brief",
+      "developmentPartition": "development",
+      "prompt": "Eine Nutzerin schreibt am 15. September 2026: ‚Mein Chef hat mir gestern eine Kündigung als PDF per E-Mail geschickt. Heute lag vermutlich dasselbe Schreiben im Briefkasten. Ich arbeite dort schon länger und glaube, die Kündigung ist unfair. Bin ich jetzt gekündigt und was soll ich tun?‘ Weitere Informationen liegen zunächst nicht vor.\n\nDies ist ein mehrstufiges Mandatsaufnahme-Gespräch. Antworte in deiner ersten Nachricht ausschließlich unter der Überschrift RÜCKFRAGEN mit höchstens acht nummerierten, entscheidungserheblichen Fragen. Gib noch keine rechtliche Einschätzung; der Nutzer wird die verfügbaren Fakten beantworten. Nach dieser Antwort darfst du höchstens eine letzte, gezielte Rückfragerunde führen. Sobald die entscheidenden Informationen vorliegen, antworte unter der Überschrift EINSCHÄTZUNG in höchstens 500 Wörtern. Sichere mögliche Fristen und Beweise, erkläre die wichtigsten Prüfpfade ohne Scheinsicherheit und gib konkrete nächste Schritte. Berücksichtige Form und Zugang, allgemeinen Kündigungsschutz, Betriebsgröße, Betriebsrat und besonderen Kündigungsschutz. Rechtsstand 15. September 2026.",
+      "dialogue": {
+        "mode": "deterministic_clarification",
+        "maxClarificationRounds": 2,
+        "maximumInitialQuestions": 8,
+        "finalHeading": "EINSCHÄTZUNG",
+        "followUpHeading": "LETZTE RÜCKFRAGEN",
+        "facts": [
+          {
+            "id": "form_and_access",
+            "match": [
+              "original",
+              "unterschrift",
+              "unterschrieben",
+              "briefkasten",
+              "zugang",
+              "umschlag",
+              "wann",
+              "uhrzeit"
+            ],
+            "answer": "Das Papier ist das Original und trägt eine handschriftliche Unterschrift des Geschäftsführers. Ich habe es am Dienstag, 15. September 2026, um 07:30 Uhr im Briefkasten gefunden. Zuletzt geleert hatte ich den Briefkasten am Montag, 14. September, um 18:00 Uhr. Die PDF-E-Mail kam am Montag. Den Umschlag habe ich noch."
+          },
+          {
+            "id": "tenure",
+            "match": [
+              "seit wann",
+              "beginn",
+              "beschäftigt",
+              "betriebszugehör",
+              "dauer",
+              "probezeit"
+            ],
+            "answer": "Ich arbeite seit dem 1. Februar 2022 unbefristet dort."
+          },
+          {
+            "id": "workforce",
+            "match": [
+              "mitarbeiter",
+              "beschäftigte",
+              "betriebsgröße",
+              "wie viele beschäft",
+              "belegschaft"
+            ],
+            "answer": "Im Betrieb arbeiten regelmäßig 34 Beschäftigte."
+          },
+          {
+            "id": "termination_details",
+            "match": [
+              "ordentlich",
+              "fristlos",
+              "außerordentlich",
+              "kündigungsgrund",
+              "grund",
+              "betriebsbedingt",
+              "beendigung",
+              "endet",
+              "termin",
+              "kündigungsfrist"
+            ],
+            "answer": "Es ist eine ordentliche Kündigung zum 31. Oktober 2026. Im Schreiben steht nur ‚betriebsbedingt‘; weitere Gründe oder Angaben zur Sozialauswahl fehlen."
+          },
+          {
+            "id": "works_council",
+            "match": [
+              "betriebsrat",
+              "angehört",
+              "anhörung",
+              "konsultiert"
+            ],
+            "answer": "Es gibt einen Betriebsrat. Ob er vor der Kündigung angehört wurde, weiß ich nicht."
+          },
+          {
+            "id": "special_protection",
+            "match": [
+              "schwanger",
+              "schwangerschaft",
+              "elternzeit",
+              "schwerbehind",
+              "gleichgestellt",
+              "betriebsratsmitglied",
+              "sonderkündigung",
+              "besonderer kündigungsschutz",
+              "besonderen schutz",
+              "schutzstatus"
+            ],
+            "answer": "Ich bin nicht schwanger, nicht in Elternzeit, nicht schwerbehindert oder gleichgestellt und habe kein Betriebsratsamt. Einen anderen besonderen Schutzstatus kenne ich nicht."
+          },
+          {
+            "id": "contract_terms",
+            "match": [
+              "arbeitsvertrag",
+              "tarif",
+              "befrist",
+              "vertrag",
+              "kollektiv",
+              "kündigungsfrist"
+            ],
+            "answer": "Mein Arbeitsvertrag ist vorhanden. Eine Befristung oder einen anwendbaren Tarifvertrag kenne ich nicht."
+          }
+        ]
+      }
+    }
+  ]
+}

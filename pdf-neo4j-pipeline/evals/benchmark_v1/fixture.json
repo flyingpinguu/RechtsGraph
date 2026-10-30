@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "title": "RechtsGraph compact repeatable benchmark v1",
+  "referenceStatus": "reviewed",
+  "frozenAsOf": "2026-09-15",
+  "notes": "Seven fixed tasks: three known development cases, three deterministic corpus tasks, and one no-research control. Gold material is never included in agent context.",
+  "cases": [
+    {
+      "id": "legal_01_representation",
+      "category": "legal_case",
+      "panel": "end_to_end",
+      "expectedEvidenceRoute": "mixed",
+      "referenceStatus": "reviewed",
+      "sourceCaseId": "pilot_01",
+      "prompt": "Deutschland. G und F sind Gebrauchtwagenhändlerinnen. G beschäftigte A laut Arbeitsvertrag hauptsächlich zum Pkw-Einkauf. Ein halbes Jahr später teilte sie etwa 20 regionalen Händlern, darunter F, schriftlich mit, A dürfe für sie Gebrauchtwagen aller Art kaufen; F archivierte das Schreiben. Drei Jahre später beschränkte G A nach Streit über die Einkaufspolitik auf den Verkauf, widerrief ihm gegenüber vorsorglich jede Vollmacht und erlaubte Verkäufe nur nach Rücksprache. Dies schrieb sie auch ihren Geschäftspartnern. Das Schreiben lag am Morgen des 3. Juli in Fs Postfilialfach. F vergaß es, erhielt es am 4. Juli auf den Schreibtisch und las es am 6. Juli. Am 5. Juli kaufte A, um Gs Vertrauen durch günstige Einkäufe zurückzugewinnen, bei F einen VW Beetle für ausgehandelte 8.200 Euro. Er unterschrieb nur mit seinem Namen; F kannte ihn aus etwa zwölf jährlichen Einkäufen als Gs Mitarbeiter. Danach kaufte er bei der H-GmbH, die mit G noch nie gehandelt hatte, einen Smart für 5.500 Euro. Er stellte sich als Gs Einkäufer vor; Hs Geschäftsführer vertraute wegen As Sachkunde und Auftreten sowie Gs Ruf. Nach Rechnungseingang lehnte G beide Geschäfte sofort gegenüber A ab. Können F und H von G oder zumindest von A Zahlung der jeweiligen Kaufpreise verlangen?\n\nTESTBEDINGUNG: Suche nicht nach der konkreten Übungsaufgabe oder ihrer Musterlösung. Die Recherche nach allgemeinen Gesetzen und Rechtsprechung ist erlaubt. Beurteile den angegebenen Sachverhalt auf Deutsch in höchstens 900 Wörtern. Trenne die vier möglichen Ansprüche und nenne verbleibende Unsicherheiten knapp."
+    },
+    {
+      "id": "legal_02_factoring",
+      "category": "legal_case",
+      "panel": "end_to_end",
+      "expectedEvidenceRoute": "mixed",
+      "referenceStatus": "reviewed",
+      "sourceCaseId": "pilot_02",
+      "prompt": "A betreibt ein im Handelsregister eingetragenes, kaufmännisch eingerichtetes Bauunternehmen; die eingetragene B-GmbH liefert ihm Baustoffe. Ihre beiderseits unterzeichneten Einkaufsbedingungen erlauben B Abtretung oder Dritteinzug nur mit As vorheriger schriftlicher Zustimmung, setzen ein Jahr Zahlungsfrist ab Lieferung und behalten B das Eigentum bis zur Vollzahlung vor. Am 1. Dezember 2024 trat B C per Factoring eine Forderung über 50.000 Euro aus einer Zementmischerlieferung vom 31. Oktober ab. Am 9. Dezember informierte sie A; er widersprach, handelte aber weiter mit B. Am 2. Januar 2025 lieferte B auf Bestellung 20 Tonnen Recycling-Schrott als Unterbau. As Probe vom 3. Januar zeigte stark überhöhtes Arsen. A rügte sofort und verlangte Ersatz. B, die von D nach Vorlage amtlicher Unbedenklichkeitszertifikate gekauft hatte, verweigerte Nacherfüllung. A trat am 1. März zurück und verlangte wegen vollständiger Sperrung seiner Lagerhallen die Abholung. Nach Bs Weigerung ließ er das Material am 1. April für 50.000 Euro entfernen. Am 3. April rechnete A gegenüber B gegen Ansprüche aus früheren Geschäften auf; offen war nur die Forderung vom 31. Oktober. Kurz danach wurde A insolvent. Die Insolvenzverwaltung verweigert C unter Verweis auf die Aufrechnung Leistung. Wegen erwarteter geringer Quote fordert C von B 50.000 Euro. Kann C von B Zahlung verlangen?\n\nTESTBEDINGUNG: Suche nicht nach der konkreten Übungsaufgabe oder ihrer Musterlösung. Die Recherche nach allgemeinen Gesetzen und Rechtsprechung ist erlaubt. Beurteile den angegebenen Sachverhalt auf Deutsch in höchstens 1.000 Wörtern und nenne Anspruchsgrundlage, zentrale Normenkette und Ergebnis."
+    },
+    {
+      "id": "legal_03_freizuegigkeit",
+      "category": "legal_case",
+      "panel": "end_to_end",
+      "expectedEvidenceRoute": "mixed",
+      "referenceStatus": "reviewed",
+      "sourceCaseId": "pilot_03",
+      "prompt": "Deutschland und Unionsrecht. Der Niederländer A lebt an der Grenze und fährt monatlich zum Friseur ins niedersächsische S. Anfang 2025 verbreitet sich weltweit eine neue virale Atemwegserkrankung (A/H16N9/Emsland/1/2025), vor allem durch Tröpfchen und Aerosole. Die WHO bescheinigt pandemisches Potenzial. Verläufe reichen von symptomlos bis tödlich; Inkubation: vier bis fünf Tage. Deutschland und die Niederlande melden Infektionen und Todesfälle; Impfstoff und flächendeckende schnelle Tests fehlen. Deutschland verhängt Kontaktbeschränkungen und verweigert ab 1. März Nichtdeutschen die Einreise, außer bei Durchreise, Berufspendeln, Warenverkehr oder wichtigem Grund. Am Montag, 3. März, verweigert die zuständige Bundespolizei dem nicht erkrankten, symptomfreien A wegen seines Friseurbesuchs die Einreise nach § 6 FreizügG/EU. Am 10. März fallen die Beschränkungen weg. A erhebt am 20. März beim zuständigen Verwaltungsgericht Feststellungsklage. Er rügt pauschale Unionsbürgerabweisung, Staatsangehörigkeitsdiskriminierung, die niederländische Abweichung und dass § 6 epidemisches Potenzial verlange, die WHO aber nur pandemisches bescheinige. Die Behörde verweist auf § 6 Abs. 1 FreizügG/EU, die Gleichbehandlung aller Ausländer, den entbehrlichen Reisezweck, staatlichen Gesundheitsschutz und darauf, dass Deutschen die Einreise nicht verboten werden könne. Hat As Klage Aussicht auf Erfolg? Bearbeitungsvermerk: umfassend, erforderlichenfalls hilfsgutachtlich prüfen. Pandemisch bedeutet hier weltweite Ausbreitung mit hohen Fallzahlen und regelmäßig schweren Verläufen; epidemisch bedeutet örtlich gehäufte Fälle einheitlicher Ursache.\n\nTESTBEDINGUNG: Suche nicht nach der konkreten Übungsaufgabe oder ihrer Musterlösung. Die Recherche nach allgemeinen Gesetzen und Rechtsprechung ist erlaubt. Antworte auf Deutsch in höchstens 1.400 Wörtern und trenne Zulässigkeit und Begründetheit."
+    },
+    {
+      "id": "retrieval_01_bgb_130",
+      "category": "known_provision",
+      "panel": "retrieval",
+      "expectedEvidenceRoute": "local_advantage",
+      "referenceStatus": "reviewed",
+      "prompt": "Gib den vollständigen aktuellen Wortlaut von § 130 Abs. 1 BGB wieder. Erkläre anschließend in höchstens drei Sätzen, welche beiden Zugangsregeln der Absatz enthält. Nenne die verwendete Fundstelle. Insgesamt höchstens 220 Wörter."
+    },
+    {
+      "id": "retrieval_02_incoming_bgb_399",
+      "category": "incoming_references",
+      "panel": "retrieval",
+      "expectedEvidenceRoute": "local_advantage",
+      "referenceStatus": "reviewed",
+      "prompt": "Welche Struktureinheiten im derzeitigen deutschen RechtsGraph-Korpus verweisen über eine aufgelöste REFERS_TO-Kante unmittelbar auf § 399 BGB? Nenne ausschließlich die vollständige Menge der Fundstellen, nicht bloß Beispiele. Erläutere kurz, was die Kante belegt und was nicht. Schließe mit genau einer maschinenlesbaren Zeile in diesem Format ab: ERGEBNIS: <Gesetz § Nummer>; <Gesetz § Nummer>. In dieser Ergebniszeile darf § 399 BGB selbst nicht stehen. Insgesamt höchstens 250 Wörter."
+    },
+    {
+      "id": "retrieval_03_ai_act_art_2",
+      "category": "cross_document_references",
+      "panel": "retrieval",
+      "expectedEvidenceRoute": "local_advantage",
+      "referenceStatus": "reviewed",
+      "prompt": "Welche externen EU-Rechtsakte sind im konsolidierten, derzeit in RechtsGraph indexierten Artikel 2 der Verordnung (EU) 2024/1689 über aufgelöste Dokumentverweise unmittelbar referenziert? Interne Verweise auf andere Artikel derselben Verordnung zählen nicht. Nenne jeden Rechtsakt kurz und schließe mit genau einer maschinenlesbaren Zeile in diesem Format ab: ERGEBNIS_CELEX: <CELEX>; <CELEX>. Insgesamt höchstens 300 Wörter."
+    },
+    {
+      "id": "control_01_email",
+      "category": "no_research_email",
+      "panel": "no_harm",
+      "expectedEvidenceRoute": "no_research",
+      "referenceStatus": "reviewed",
+      "prompt": "Formuliere eine freundliche geschäftliche E-Mail an Frau Keller. Der für Mittwoch, den 23. September 2026 um 10:00 Uhr vereinbarte Termin muss wegen einer internen Terminkollision verschoben werden. Schlage Freitag, den 25. September 2026 um 14:30 Uhr vor und bitte um kurze Bestätigung. Erfinde keine weiteren Gründe oder Absprachen. Gib eine Betreffzeile und einen E-Mail-Text mit insgesamt 70 bis 110 Wörtern aus. Für diese Aufgabe ist keine Recherche erforderlich."
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-09-15",
+  "sources": [
+    {
+      "taskId": "legal_01_representation",
+      "title": "Zwei Autokäufe",
+      "localPath": "tmp/pdfs/2026_1_2008.pdf",
+      "sourceUrl": "https://www.zjs-online.com/dat/artikel/2026_1_2008.pdf",
+      "pages": 9,
+      "sha256": "c096ccc89b6d8e6e756dcf60ab422482314e0198fff88bc156f72d97df8f99cd"
+    },
+    {
+      "taskId": "legal_02_factoring",
+      "title": "Zession und Zankerei",
+      "localPath": "tmp/pdfs/2026_1_2010.pdf",
+      "sourceUrl": "https://www.zjs-online.com/dat/artikel/2026_1_2010.pdf",
+      "pages": 8,
+      "sha256": "5cde1ffb1d91967b8e1a920d0a61fec4aa8584d8dd82bf95dd9cebbffce22ffa"
+    },
+    {
+      "taskId": "legal_03_freizuegigkeit",
+      "title": "Torfgrippe am Checkpoint",
+      "localPath": "tmp/pdfs/2026_2_2026.pdf",
+      "sourceUrl": "https://www.zjs-online.com/dat/artikel/2026_2_2026.pdf",
+      "pages": 16,
+      "sha256": "f066745ff9e1396ba01aa599a949d3900b1f99458414b708666ba90b65e46a72"
+    }
+  ]
+}

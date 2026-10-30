@@ -30,7 +30,7 @@ from .table_chunking import (
 )
 
 
-EURLEX_FORMEX_EXTRACTOR_VERSION = "1.0.0"
+EURLEX_FORMEX_EXTRACTOR_VERSION = "1.1.0"
 TEXT_CHUNK_MAX_TOKENS = 1800
 TEXT_CHUNK_TARGET_TOKENS = 1500
 BLOCK_TAGS = {
@@ -419,8 +419,8 @@ def _load_package(
             for item in archive.infolist()
         ]
     root = ET.fromstring(xml_bytes)
-    if root.tag != "CONS.ACT":
-        raise ValueError("expected CONS.ACT root, got {!r}".format(root.tag))
+    if root.tag not in {"CONS.ACT", "ACT"}:
+        raise ValueError("expected CONS.ACT or ACT root, got {!r}".format(root.tag))
     return {
         "path": path,
         "package_sha256": package_hash,
@@ -451,6 +451,14 @@ def eu_citation_aliases(base_celex: str, descriptor: str) -> List[str]:
         "{} {}/{}".format(act_type, year, number),
         "{} {}/{}".format(act_type, number, year),
     }
+    short_year = year[-2:] if year.startswith("19") else ""
+    if short_year:
+        aliases.update(
+            {
+                "{} {}/{}".format(act_type, short_year, number),
+                "{} {}/{}".format(act_type, number, short_year),
+            }
+        )
     for code in ("EU", "EG", "EWG", "EAG"):
         aliases.update(
             {
@@ -460,6 +468,15 @@ def eu_citation_aliases(base_celex: str, descriptor: str) -> List[str]:
                 "{} {}/{}/{}".format(act_type, number, year, code),
             }
         )
+        if short_year:
+            aliases.update(
+                {
+                    "{} ({}) {}/{}".format(act_type, code, short_year, number),
+                    "{} ({}) Nr. {}/{}".format(act_type, code, number, short_year),
+                    "{} {}/{}/{}".format(act_type, short_year, number, code),
+                    "{} {}/{}/{}".format(act_type, number, short_year, code),
+                }
+            )
     return sorted(alias for alias in aliases if year and number)
 
 
@@ -1226,7 +1243,7 @@ def _parse_annex(
 
     nested_index = 0
     for child in annex:
-        if child.tag == "CONS.ANNEX":
+        if child.tag in {"CONS.ANNEX", "ANNEX"}:
             nested_index += 1
             _parse_annex(
                 builder,
@@ -1270,18 +1287,40 @@ def extract_document_from_formex(
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     package = _load_package(source_path, register_record)
     root: ET.Element = package["root"]
-    cons_doc = root.find("./CONS.DOC")
-    if cons_doc is None:
-        raise ValueError("CONS.ACT package has no CONS.DOC")
-    info_element = root.find("./INFO.CONSLEG")
-    info = dict(info_element.attrib) if info_element is not None else {}
-    info.update(dict(register_record.get("info_consleg") or {}))
-
     base_celex = str(register_record.get("base_celex") or "")
     consolidated_celex = str(register_record.get("consolidated_celex") or base_celex)
-    descriptor = str(register_record.get("descriptor") or "")
-    title_xml = element_text(cons_doc.find("./TITLE"), skip_tags={"TBL"})
-    title = str(register_record.get("title") or title_xml or consolidated_celex)
+    descriptor = str(register_record.get("descriptor") or (base_celex[5:6] if base_celex else ""))
+    is_original_act = root.tag == "ACT"
+    if is_original_act:
+        document_root = root
+        info: Dict[str, Any] = {}
+        date_element = root.find("./BIB.INSTANCE/DATE")
+        if date_element is not None and date_element.get("ISO"):
+            info["START.DATE"] = date_element.get("ISO")
+        legal_value_element = root.find("./BIB.INSTANCE/LEGAL.VALUE")
+        if legal_value_element is not None and element_text(legal_value_element):
+            info["LEG.VAL"] = element_text(legal_value_element)
+        title_xml = element_text(root.find("./TITLE"), skip_tags={"TBL"})
+        title = str(title_xml or register_record.get("title") or base_celex)
+        source_format = "eurlex_formex_original"
+        source_package_kind = "fmx4_original_zip"
+        annexes = [
+            *root.findall("./ANNEX"),
+            *root.findall("./ANNEXES/ANNEX"),
+            *root.findall("./CONS.ANNEX"),
+        ]
+    else:
+        document_root = root.find("./CONS.DOC")
+        if document_root is None:
+            raise ValueError("CONS.ACT package has no CONS.DOC")
+        info_element = root.find("./INFO.CONSLEG")
+        info = dict(info_element.attrib) if info_element is not None else {}
+        info.update(dict(register_record.get("info_consleg") or {}))
+        title_xml = element_text(document_root.find("./TITLE"), skip_tags={"TBL"})
+        title = str(register_record.get("title") or title_xml or consolidated_celex)
+        source_format = "eurlex_formex"
+        source_package_kind = "fmx4_zip"
+        annexes = list(document_root.findall("./CONS.ANNEX"))
     document_global_key = "celex_{}".format(slugify(base_celex))
     document_key = base_celex
     document_id = "doc_eu_{}".format(slugify(consolidated_celex))
@@ -1298,11 +1337,11 @@ def extract_document_from_formex(
         citation_prefix=citation_prefix,
     )
 
-    preamble = cons_doc.find("./PREAMBLE")
+    preamble = document_root.find("./PREAMBLE")
     if preamble is not None:
         _parse_preamble(builder, preamble)
 
-    enacting = cons_doc.find("./ENACTING.TERMS")
+    enacting = document_root.find("./ENACTING.TERMS")
     if enacting is not None:
         article_index = 0
         division_index = 0
@@ -1328,11 +1367,11 @@ def extract_document_from_formex(
                     division_index,
                 )
 
-    final = cons_doc.find("./FINAL")
+    final = document_root.find("./FINAL")
     if final is not None:
         _parse_final(builder, final)
 
-    for annex_index, annex in enumerate(cons_doc.findall("./CONS.ANNEX"), 1):
+    for annex_index, annex in enumerate(annexes, 1):
         _parse_annex(
             builder,
             annex,
@@ -1343,7 +1382,7 @@ def extract_document_from_formex(
         )
 
     if not builder.units or not builder.chunks:
-        fallback_text = element_text(cons_doc, skip_tags={"TBL"})
+        fallback_text = element_text(document_root, skip_tags={"TBL"})
         fallback_unit = builder.add_unit(
             global_key="{}_dokumenttext".format(document_global_key),
             unit_type="document_text",
@@ -1371,7 +1410,7 @@ def extract_document_from_formex(
             unit_id=fallback_unit["unit_id"],
         )
 
-    complete_text = element_text(cons_doc, skip_tags={"TBL"})
+    complete_text = element_text(document_root, skip_tags={"TBL"})
     placeholder_count = len(re.findall(r"\bX{3,}\b", complete_text))
     if placeholder_count:
         builder.add_issue(
@@ -1402,7 +1441,7 @@ def extract_document_from_formex(
         "structural_units": builder.units,
         "chunks": builder.chunks,
         "metadata": {
-            "source_format": "eurlex_formex",
+            "source_format": source_format,
             "extractor": "eurlex_formex",
             "eurlex_formex_extractor_version": EURLEX_FORMEX_EXTRACTOR_VERSION,
             "short_title": title,
@@ -1421,7 +1460,7 @@ def extract_document_from_formex(
             "source_xml_sha256": package["xml_sha256"],
             "source_xml_name": package["xml_name"],
             "source_package_path": str(register_record.get("local_path") or source_path),
-            "source_package_kind": "fmx4_zip",
+            "source_package_kind": source_package_kind,
             "source_package_sha256": package["package_sha256"],
             "source_package_bytes": package["package_bytes"],
             "source_package_members": package["members"],

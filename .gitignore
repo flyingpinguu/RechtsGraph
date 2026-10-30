@@ -11,14 +11,25 @@ __pycache__/
 # Local environments
 .env
 .env.*
+!.env.example
+!**/.env.example
 .venv/
+.venv-mcp/
 venv/
 env/
 pdf-neo4j-pipeline/.venv/
+pdf-neo4j-pipeline/.venv-mcp/
 
 # Generated pipeline outputs
 pdf-neo4j-pipeline/output/
 pdf-neo4j-pipeline/tmp/
+pdf-neo4j-pipeline/evals/results/
+
+# Local development reports; keep only the durable public documentation.
+pdf-neo4j-pipeline/reports/*
+!pdf-neo4j-pipeline/reports/retrieval_evaluation.md
+!pdf-neo4j-pipeline/reports/vector_search.md
+!pdf-neo4j-pipeline/reports/recent_solved_case_candidates_2026-09-11.md
 
 # Downloaded source corpora and resumable extraction artifacts
 gesetze_im_internet_pdfs/*
@@ -26,7 +37,11 @@ gesetze_im_internet_pdfs/*
 gesetze_im_internet_xml/
 eurlex_consolidated_de/*
 !eurlex_consolidated_de/.gitkeep
+external_documents/*
+!external_documents/.gitkeep
+!external_documents/catalog.json
 LEG_DE_FMX_*.zip
+/eur_lex_korpus_kategorien.png
 
 # Local Neo4j operations cheat sheet (kept outside the public repository)
 /NEO4J_QUERIES.md

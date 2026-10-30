@@ -1,0 +1,3 @@
+interface:
+  display_name: "Legal Document Review"
+  short_description: "Evidence-backed document review with false-positive control"

@@ -170,11 +170,24 @@ def _write_import_cypher(
     # then to the exact article/annex global key whenever that target exists.
     lines.extend(
         [
-            "// Close EU targets from both the German and EU corpora.",
+            "// Close targets against every uniquely matching imported document alias.",
             "MATCH (d:`Document`)",
-            "WHERE d.base_celex IS NOT NULL AND d.citation_alias_keys IS NOT NULL",
+            "WHERE d.citation_alias_keys IS NOT NULL",
             "UNWIND split(d.citation_alias_keys, '|') AS alias_key",
-            "WITH d, alias_key WHERE alias_key <> ''",
+            "WITH alias_key, collect(d) AS documents",
+            "WHERE alias_key <> ''",
+            "UNWIND documents AS candidate",
+            "WITH alias_key, documents, collect(DISTINCT candidate.base_celex) AS base_celexes",
+            "WHERE size(documents) = 1 OR (",
+            "  all(candidate IN documents WHERE candidate.base_celex IS NOT NULL)",
+            "  AND size(base_celexes) = 1",
+            ")",
+            "UNWIND documents AS d",
+            "WITH alias_key, d",
+            "ORDER BY CASE",
+            "  WHEN d.consolidated_celex STARTS WITH '0' THEN 0 ELSE 1",
+            "END, coalesce(d.consolidation_date, '') DESC",
+            "WITH alias_key, head(collect(d)) AS d",
             "CALL (d, alias_key) {",
             "  MATCH (rt:`ReferenceTarget` {target_document_key: alias_key})",
             "  WITH d, rt, coalesce(rt.requested_target_global_key, rt.global_key) AS requested_key",
@@ -280,6 +293,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-cypher", type=Path, required=True)
     parser.add_argument("--csv-uri-prefix", required=True)
     parser.add_argument("--batch-size", type=int, default=10000)
+    parser.add_argument(
+        "--source-collection",
+        action="append",
+        dest="source_collections",
+        help=(
+            "Export only manifest entries from this source collection. "
+            "Repeat the option to include more than one collection."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -287,10 +309,15 @@ def main() -> None:
     args = parse_args()
     manifest = json.loads(args.graph_manifest.read_text(encoding="utf-8"))
     extraction_dir = args.graph_manifest.parent
+    allowed_source_collections = set(args.source_collections or [])
     results = [
         item
         for item in manifest.get("results") or []
         if item.get("status") in {"ok", "skipped_existing"}
+        and (
+            not allowed_source_collections
+            or item.get("source_collection") in allowed_source_collections
+        )
     ]
     args.csv_dir.mkdir(parents=True, exist_ok=True)
 
@@ -357,6 +384,7 @@ def main() -> None:
         "schema_version": "1.0",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "source_graph_manifest": str(args.graph_manifest),
+        "source_collections": sorted(allowed_source_collections),
         "documents": documents,
         "node_rows": sum(node_counts.values()),
         "node_rows_by_primary_label": dict(sorted(node_counts.items())),

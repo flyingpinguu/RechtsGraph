@@ -1,0 +1,1 @@
+"""Compact repeatable RechtsGraph benchmark."""

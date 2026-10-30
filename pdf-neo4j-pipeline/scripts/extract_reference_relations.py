@@ -15,7 +15,6 @@ present in the current content graph.
 """
 
 import argparse
-import copy
 import datetime as dt
 import hashlib
 import json
@@ -207,6 +206,19 @@ LAW_FORWARD_SCOPE_RE = re.compile(
     r"mit\s+Ausnahme\s+(?:von|der)\s+"
 )
 LIST_ITEM_HEADING_RE = re.compile(r"(?m)^\s*\d+[a-z]?\.\s+")
+AMENDMENT_LIST_ITEM_RE = re.compile(
+    r"(?m)(?:^|\n|:\s)(?P<label>\d+[a-z]?\.)\s+"
+)
+AMENDMENT_ACTION_RE = re.compile(
+    r"\b(?:wird|werden)\b.{0,100}?\b(?:"
+    r"aufgehoben|geändert|geaendert|ersetzt|eingefügt|eingefuegt|"
+    r"gefasst|gefaßt|neu gefasst|neu gefaßt"
+    r")\b",
+    flags=re.DOTALL,
+)
+TABLE_HEADER_ABBREVIATION_RE = re.compile(
+    r"\((?P<abbr>[A-ZÄÖÜ][A-Za-zÄÖÜäöüß0-9]{1,20})\)"
+)
 
 EXTERNAL_SCOPE_BRIDGE_RE = re.compile(
     r"^\s*(?:"
@@ -265,6 +277,41 @@ def slugify(value: str) -> str:
         value = value.replace(old, new)
     value = re.sub(r"[^a-z0-9]+", "_", value)
     return value.strip("_")
+
+
+def grammatical_law_alias_keys(value: Optional[str]) -> Set[str]:
+    """Return conservative nominative/genitive variants of German act titles.
+
+    References commonly contain ``des Deutschen Richtergesetzes`` while the
+    document title is ``Deutsches Richtergesetz``. Only the leading adjective
+    is varied, and only for an explicit legal-form suffix.
+    """
+
+    normalized = slugify(value or "")
+    aliases = {normalized} if normalized else set()
+    parts = normalized.split("_")
+    if len(parts) < 2:
+        return aliases
+    first, legal_form = parts[0], parts[-1]
+    replacement = None
+    if legal_form.endswith(("gesetz", "gesetzbuch")):
+        if first.endswith("en"):
+            replacement = first[:-2] + "es"
+        elif first.endswith("es"):
+            replacement = first[:-2] + "en"
+    elif legal_form.endswith(("verordnung", "ordnung")):
+        if first.endswith("en"):
+            replacement = first[:-2] + "e"
+        elif first.endswith("e"):
+            replacement = first[:-1] + "en"
+    elif legal_form.endswith("vertrag"):
+        if first.endswith("en"):
+            replacement = first[:-2] + "er"
+        elif first.endswith("er"):
+            replacement = first[:-2] + "en"
+    if replacement:
+        aliases.add("_".join([replacement, *parts[1:]]))
+    return aliases
 
 
 def load_json(path: str) -> Dict[str, Any]:
@@ -326,6 +373,40 @@ def normalize_abbreviation(abbr: str) -> str:
     return slugify(abbr)
 
 
+def canonical_eu_identifier(identifier: str) -> str:
+    """Expand legacy two-digit EU years without changing citation order."""
+
+    cleaned = re.sub(r"\s+", " ", identifier or "").strip()
+    match = re.fullmatch(
+        r"(?P<prefix>\((?:EG|EU|EWG|EAG)\)\s*)?"
+        r"(?P<nr>Nr\.\s*)?"
+        r"(?P<first>\d{2,4})/(?P<second>\d{1,4})"
+        r"(?P<suffix>/(?:EG|EU|EWG|EAG))?",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return cleaned
+
+    first = match.group("first")
+    second = match.group("second")
+    first_is_full_year = len(first) == 4 and 1900 <= int(first) <= 2099
+    if match.group("nr"):
+        if len(second) == 2:
+            second = "19{}".format(second)
+    elif len(first) == 2:
+        first = "19{}".format(first)
+    elif len(second) == 2 and len(first) >= 3 and not first_is_full_year:
+        second = "19{}".format(second)
+    return "{}{}{}/{}{}".format(
+        match.group("prefix") or "",
+        match.group("nr") or "",
+        first,
+        second,
+        match.group("suffix") or "",
+    )
+
+
 def eu_act_key(act_type: str, identifier: str) -> str:
     normalized = (act_type or "").lower()
     if "verordnung" in normalized:
@@ -334,7 +415,9 @@ def eu_act_key(act_type: str, identifier: str) -> str:
         act_type = "Richtlinie"
     elif "beschluss" in normalized:
         act_type = "Beschluss"
-    return slugify("{} {}".format(act_type or "", identifier or ""))
+    return slugify(
+        "{} {}".format(act_type or "", canonical_eu_identifier(identifier))
+    )
 
 
 def dated_act_key(act_type: str, date_text: str) -> str:
@@ -793,6 +876,8 @@ class ReferenceExtractor:
             slugify(alias),
             slugify(strip_trailing_footnote_markers(alias)),
         }
+        for alias_key in list(alias_keys):
+            alias_keys.update(grammatical_law_alias_keys(alias_key))
         alias_keys.update(
             alias_key.replace("_", "")
             for alias_key in list(alias_keys)
@@ -825,6 +910,7 @@ class ReferenceExtractor:
                     "global_key",
                     "canonical_citation",
                     "abbreviation",
+                    "official_abbreviation",
                     "title",
                     "short_title",
                     "full_title",
@@ -862,12 +948,16 @@ class ReferenceExtractor:
                         metadata = json.loads(metadata_json)
                     except (TypeError, ValueError):
                         metadata = {}
-                    for alias in metadata.get("jurabk") or []:
-                        self.register_document_alias(
-                            alias,
-                            document_global_key,
-                            node["id"],
-                        )
+                    for metadata_alias_field in ("jurabk", "official_abbreviation"):
+                        metadata_aliases = metadata.get(metadata_alias_field) or []
+                        if isinstance(metadata_aliases, str):
+                            metadata_aliases = [metadata_aliases]
+                        for alias in metadata_aliases:
+                            self.register_document_alias(
+                                alias,
+                                document_global_key,
+                                node["id"],
+                            )
                 for title_field in (
                     "title",
                     "short_title",
@@ -1028,10 +1118,14 @@ class ReferenceExtractor:
 
     def mapped_document_key_for_alias(self, key: Optional[str]) -> Optional[str]:
         normalized = slugify(key or "")
-        return (
-            self.document_alias_to_global_key.get(normalized)
-            or self.document_alias_to_global_key.get(normalized.replace("_", ""))
-        )
+        for candidate in grammatical_law_alias_keys(normalized):
+            mapped = (
+                self.document_alias_to_global_key.get(candidate)
+                or self.document_alias_to_global_key.get(candidate.replace("_", ""))
+            )
+            if mapped:
+                return mapped
+        return None
 
     def representative_chunk_id_for_unit(self, unit_id: str) -> Optional[str]:
         chunks = [
@@ -1081,7 +1175,11 @@ class ReferenceExtractor:
             "properties": {k: v for k, v in properties.items() if v is not None},
         }
 
-    def resolve_target(self, target_global_key: str) -> Tuple[str, str, Optional[str]]:
+    def resolve_target(
+        self,
+        target_global_key: str,
+        target_document_key: Optional[str] = None,
+    ) -> Tuple[str, str, Optional[str]]:
         candidate_keys = [target_global_key]
         nested_para = re.match(
             r"^(?P<document>.+)_art_[^_]+_para_(?P<tail>.+)$",
@@ -1094,7 +1192,11 @@ class ReferenceExtractor:
                     nested_para.group("tail"),
                 )
             )
-        document_part = document_part_from_target_key(target_global_key)
+        document_part = (
+            slugify(target_document_key)
+            if target_document_key
+            else document_part_from_target_key(target_global_key)
+        )
         mapped_document_key = self.mapped_document_key_for_alias(document_part)
         if mapped_document_key and mapped_document_key != document_part:
             if target_global_key == document_part:
@@ -1131,7 +1233,10 @@ class ReferenceExtractor:
         requested_target_global_key = target_global_key
         source_id = source_chunk["id"]
         source_unit_id = self.source_unit_id_for_chunk(source_chunk)
-        target_id, status, resolved_target_global_key = self.resolve_target(target_global_key)
+        target_id, status, resolved_target_global_key = self.resolve_target(
+            target_global_key,
+            target_document_key,
+        )
         effective_target_global_key = resolved_target_global_key or target_global_key
         if status == "resolved":
             requested_level = target_level_from_global_key(
@@ -1500,7 +1605,10 @@ class ReferenceExtractor:
 
     def extract_external_long(self, chunk: Dict[str, Any], text: str, offset: int) -> List[Tuple[int, int]]:
         spans = []
+        explicit_eu_spans = [match.span() for match in ARTICLE_EXTERNAL_EU_RE.finditer(text)]
         for match in ARTICLE_PARA_EXTERNAL_LONG_RE.finditer(text):
+            if self.overlaps(match.start(), match.end(), explicit_eu_spans):
+                continue
             if not plausible_law_name(match.group("law")):
                 continue
             law_key = normalize_law_name(match.group("law"))
@@ -1542,6 +1650,8 @@ class ReferenceExtractor:
         ):
             for match in pattern.finditer(text):
                 if self.overlaps(match.start(), match.end(), spans):
+                    continue
+                if self.overlaps(match.start(), match.end(), explicit_eu_spans):
                     continue
                 if not plausible_law_name(match.group("law")):
                     continue
@@ -1841,6 +1951,7 @@ class ReferenceExtractor:
     ) -> List[Tuple[int, int]]:
         spans: List[Tuple[int, int]] = []
         doc_key = self.document_key_for_chunk(chunk)
+        table_document_key = self.table_header_document_key(chunk, text)
         source_id = chunk["id"]
         source_unit_id = self.source_unit_id_for_chunk(chunk)
         for match in INTERNAL_ARTICLE_RE.finditer(text):
@@ -1851,28 +1962,62 @@ class ReferenceExtractor:
                 "art",
                 match.group("body"),
             )
-            resolvable_keys = []
-            for target_key in target_keys:
+            table_target_keys = (
+                global_keys_for_para_body(
+                    table_document_key,
+                    "art",
+                    match.group("body"),
+                )
+                if table_document_key
+                else []
+            )
+            matched = False
+            for index, target_key in enumerate(target_keys):
                 target_id, status, resolved_key = self.resolve_target(target_key)
                 if (
                     status == "resolved"
                     and resolved_key == target_key
                     and target_id not in {source_id, source_unit_id}
                 ):
-                    resolvable_keys.append(target_key)
-            if not resolvable_keys:
-                continue
-            for target_key in resolvable_keys:
-                self.add_reference(
-                    chunk,
-                    match.group("mention"),
-                    offset + match.start(),
-                    offset + match.end(),
-                    doc_key,
-                    target_key,
-                    "internal",
-                    target_key,
+                    self.add_reference(
+                        chunk,
+                        match.group("mention"),
+                        offset + match.start(),
+                        offset + match.end(),
+                        doc_key,
+                        target_key,
+                        "internal",
+                        target_key,
+                    )
+                    matched = True
+                    continue
+                if index >= len(table_target_keys):
+                    continue
+                table_target_key = table_target_keys[index]
+                table_id, table_status, table_resolved = self.resolve_target(
+                    table_target_key,
+                    table_document_key,
                 )
+                if (
+                    status == "unresolved"
+                    and table_status == "resolved"
+                    and table_resolved == table_target_key
+                    and table_id not in {source_id, source_unit_id}
+                ):
+                    self.add_reference(
+                        chunk,
+                        match.group("mention"),
+                        offset + match.start(),
+                        offset + match.end(),
+                        table_document_key,
+                        table_target_key,
+                        "external_table_header_context",
+                        table_target_key,
+                        target_title_key=table_document_key,
+                    )
+                    matched = True
+            if not matched:
+                continue
             spans.append((match.start(), match.end()))
         return spans
 
@@ -1885,6 +2030,14 @@ class ReferenceExtractor:
     ) -> List[Tuple[int, int]]:
         """Resolve references governed by an explicit preceding law context."""
         spans: List[Tuple[int, int]] = []
+        spans.extend(
+            self.extract_amendment_item_context(
+                chunk,
+                text,
+                offset,
+                occupied,
+            )
+        )
         headings = list(LAW_SECTION_CONTEXT_RE.finditer(text))
         for index, heading in enumerate(headings):
             law_key = normalize_law_name(heading.group("law"))
@@ -1931,6 +2084,124 @@ class ReferenceExtractor:
                 current_end = match.end()
         return spans
 
+    def amendment_item_document_key(
+        self,
+        block: str,
+        source_document_key: str,
+    ) -> Optional[str]:
+        """Return the uniquely indexed act named at the start of an amendment item."""
+
+        prefix = block[: min(len(block), 320)]
+        for boundary in re.finditer(r"(?:\s|[,;:(])", prefix):
+            candidate = prefix[:boundary.start()].strip(" \t\r\n,;:(")
+            if not candidate:
+                continue
+            mapped = self.mapped_document_key_for_alias(candidate)
+            if mapped and mapped != source_document_key:
+                return mapped
+        return None
+
+    def extract_amendment_item_context(
+        self,
+        chunk: Dict[str, Any],
+        text: str,
+        offset: int,
+        occupied: List[Tuple[int, int]],
+    ) -> List[Tuple[int, int]]:
+        """Apply a numbered amendment item's named act to its bare citations."""
+
+        spans: List[Tuple[int, int]] = []
+        source_document_key = self.document_key_for_chunk(chunk)
+        items = list(AMENDMENT_LIST_ITEM_RE.finditer(text))
+        for index, item in enumerate(items):
+            block_start = item.end()
+            block_end = items[index + 1].start() if index + 1 < len(items) else len(text)
+            block = text[block_start:block_end]
+            if not AMENDMENT_ACTION_RE.search(block):
+                continue
+            document_key = self.amendment_item_document_key(
+                block,
+                source_document_key,
+            )
+            if not document_key:
+                continue
+            for pattern, prefix in (
+                (INTERNAL_PARA_RE, "para"),
+                (INTERNAL_ARTICLE_RE, "art"),
+                (INTERNAL_ANNEX_RE, "annex"),
+            ):
+                for match in pattern.finditer(text, block_start, block_end):
+                    if self.overlaps(match.start(), match.end(), occupied + spans):
+                        continue
+                    target_keys = self.external_target_keys(
+                        match,
+                        document_key,
+                        prefix,
+                    )
+                    exact_target_keys = [
+                        target_key
+                        for target_key in target_keys
+                        if self.resolve_target(target_key, document_key)[1:] == (
+                            "resolved",
+                            target_key,
+                        )
+                    ]
+                    if not exact_target_keys:
+                        continue
+                    for target_key in exact_target_keys:
+                        self.add_reference(
+                            chunk,
+                            match.group("mention"),
+                            offset + match.start(),
+                            offset + match.end(),
+                            document_key,
+                            target_key,
+                            "external_amendment_scope",
+                            target_key,
+                            target_title_key=document_key,
+                        )
+                    spans.append((match.start(), match.end()))
+        return spans
+
+    def table_header_cells(self, chunk: Dict[str, Any]) -> List[str]:
+        props = chunk.get("properties") or {}
+        cells = [str(value) for value in props.get("columns") or [] if value]
+        table_data = props.get("table_data")
+        if isinstance(table_data, str):
+            try:
+                table_data = json.loads(table_data)
+            except (TypeError, ValueError):
+                table_data = {}
+        if isinstance(table_data, dict):
+            for row in table_data.get("header_matrix") or []:
+                cells.extend(str(value) for value in row if value)
+        return cells
+
+    def table_header_document_key(
+        self,
+        chunk: Dict[str, Any],
+        text: str,
+    ) -> Optional[str]:
+        props = chunk.get("properties") or {}
+        if props.get("chunk_type") != "table_rows":
+            return None
+        header_cells = self.table_header_cells(chunk)
+        header = "\n".join(header_cells) or text.split("Zeilen", 1)[0][:2400]
+        source_document_key = self.document_key_for_chunk(chunk)
+        candidates = {
+            mapped
+            for match in TABLE_HEADER_ABBREVIATION_RE.finditer(header)
+            for mapped in [self.mapped_document_key_for_alias(match.group("abbr"))]
+            if mapped and mapped != source_document_key
+        }
+        candidates.update(
+            mapped
+            for cell in header_cells
+            for mapped in [self.mapped_document_key_for_alias(cell)]
+            if mapped and mapped != source_document_key
+        )
+        return next(iter(candidates)) if len(candidates) == 1 else None
+
     def extract_internal_annex(
         self,
         chunk: Dict[str, Any],
@@ -1940,6 +2211,7 @@ class ReferenceExtractor:
     ) -> List[Tuple[int, int]]:
         spans = []
         doc_key = self.document_key_for_chunk(chunk)
+        table_document_key = self.table_header_document_key(chunk, text)
         for match in INTERNAL_ANNEX_RE.finditer(text):
             if self.overlaps(match.start(), match.end(), occupied):
                 continue
@@ -1955,26 +2227,71 @@ class ReferenceExtractor:
                             slugify(number),
                             slugify(table_number),
                         )
+                        target_document_key = doc_key
+                        reference_kind = "internal"
+                        if table_document_key:
+                            external_key = "{}_{}_{}_tabelle_{}".format(
+                                table_document_key,
+                                annex_prefix,
+                                slugify(number),
+                                slugify(table_number),
+                            )
+                            source_status = self.resolve_target(target_key, doc_key)[1]
+                            external_id, external_status, external_resolved = self.resolve_target(
+                                external_key,
+                                table_document_key,
+                            )
+                            if (
+                                source_status == "unresolved"
+                                and external_status == "resolved"
+                                and external_resolved == external_key
+                                and external_id
+                            ):
+                                target_document_key = table_document_key
+                                target_key = external_key
+                                reference_kind = "external_table_header_context"
                         self.add_reference(
                             chunk,
                             match.group("mention"),
                             offset + match.start(),
                             offset + match.end(),
-                            doc_key,
+                            target_document_key,
                             target_key,
-                            "internal",
+                            reference_kind,
                             target_key,
                         )
                 else:
                     target_key = "{}_{}_{}".format(doc_key, annex_prefix, slugify(number))
+                    target_document_key = doc_key
+                    reference_kind = "internal"
+                    if table_document_key:
+                        external_key = "{}_{}_{}".format(
+                            table_document_key,
+                            annex_prefix,
+                            slugify(number),
+                        )
+                        source_status = self.resolve_target(target_key, doc_key)[1]
+                        external_id, external_status, external_resolved = self.resolve_target(
+                            external_key,
+                            table_document_key,
+                        )
+                        if (
+                            source_status == "unresolved"
+                            and external_status == "resolved"
+                            and external_resolved == external_key
+                            and external_id
+                        ):
+                            target_document_key = table_document_key
+                            target_key = external_key
+                            reference_kind = "external_table_header_context"
                     self.add_reference(
                         chunk,
                         match.group("mention"),
                         offset + match.start(),
                         offset + match.end(),
-                        doc_key,
+                        target_document_key,
                         target_key,
-                        "internal",
+                        reference_kind,
                         target_key,
                     )
             spans.append((match.start(), match.end()))
@@ -1988,15 +2305,20 @@ class ReferenceExtractor:
         occupied: List[Tuple[int, int]],
     ) -> List[Tuple[int, int]]:
         spans = []
-        source_global = (chunk.get("properties") or {}).get("global_key") or ""
+        source_unit = self.unit_by_id.get(self.source_unit_id_for_chunk(chunk)) or {}
+        source_global = (source_unit.get("properties") or {}).get("global_key") or ""
+        document_key = self.document_key_for_chunk(chunk)
+        relative_global = source_global
+        if document_key and source_global.startswith(document_key + "_"):
+            relative_global = source_global[len(document_key) + 1:]
         context_match = re.search(
-            r"^(?P<doc>.+?)_(?P<kind>para|art)_(?P<num>\d+[a-z]?)",
-            source_global,
+            r"^(?P<kind>para|art)_(?P<num>\d+[a-z]?)",
+            relative_global,
         )
         if not context_match:
             return spans
         base_key = "{}_{}_{}".format(
-            context_match.group("doc"),
+            document_key,
             context_match.group("kind"),
             context_match.group("num"),
         )
@@ -2014,7 +2336,7 @@ class ReferenceExtractor:
                 match.group("mention"),
                 offset + match.start(),
                 offset + match.end(),
-                context_match.group("doc"),
+                document_key,
                 target_key,
                 "internal",
                 target_key,
@@ -2034,6 +2356,7 @@ class ReferenceExtractor:
         unit = self.unit_by_id.get(self.source_unit_id_for_chunk(chunk)) or {}
         unit_global_key = (unit.get("properties") or {}).get("global_key") or ""
         target_key_prefix = article_context_from_unit_global_key(unit_global_key) or doc_key
+        table_document_key = self.table_header_document_key(chunk, text)
         for match in INTERNAL_PARA_RE.finditer(text):
             if self.overlaps(match.start(), match.end(), occupied):
                 continue
@@ -2041,16 +2364,43 @@ class ReferenceExtractor:
             target_keys = global_keys_for_para_body(target_key_prefix, "para", body)
             if not target_keys:
                 continue
-            for target_key in target_keys:
+            table_target_keys = (
+                global_keys_for_para_body(table_document_key, "para", body)
+                if table_document_key
+                else []
+            )
+            for index, target_key in enumerate(target_keys):
+                target_document_key = doc_key
+                reference_kind = "internal"
+                if index < len(table_target_keys):
+                    table_target_key = table_target_keys[index]
+                    source_status = self.resolve_target(target_key, doc_key)[1]
+                    _, table_status, table_resolved = self.resolve_target(
+                        table_target_key,
+                        table_document_key,
+                    )
+                    if (
+                        source_status == "unresolved"
+                        and table_status == "resolved"
+                        and table_resolved == table_target_key
+                    ):
+                        target_document_key = table_document_key
+                        target_key = table_target_key
+                        reference_kind = "external_table_header_context"
                 self.add_reference(
                     chunk,
                     match.group("mention"),
                     offset + match.start(),
                     offset + match.end(),
-                    doc_key,
+                    target_document_key,
                     target_key,
-                    "internal",
+                    reference_kind,
                     target_key,
+                    target_title_key=(
+                        target_document_key
+                        if reference_kind == "external_table_header_context"
+                        else None
+                    ),
                 )
             spans.append((match.start(), match.end()))
         return spans
@@ -2081,7 +2431,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     graph = load_json(args.input)
-    updated = ReferenceExtractor(copy.deepcopy(graph)).extract()
+    # ``load_json`` already returns a private in-memory graph. Avoid a second
+    # multi-gigabyte copy when processing the full German corpus.
+    updated = ReferenceExtractor(graph).extract()
     write_json(args.output, updated)
     counts = updated.get("counts") or {}
     refs = counts.get("relationships_by_type", {}).get("REFERS_TO", 0)

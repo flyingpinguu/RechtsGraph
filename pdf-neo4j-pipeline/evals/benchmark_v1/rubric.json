@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "benchmarkId": "rechtsgraph-compact-v1",
+  "frozenAsOf": "2026-09-15",
+  "manualScale": {
+    "0": "fehlt oder materiell falsch",
+    "1": "nur erwähnt oder überwiegend unvollständig",
+    "2": "im Kern richtig mit relevanter Lücke",
+    "3": "vollständig, präzise und auf den Sachverhalt bezogen"
+  },
+  "reportingRule": "End-to-end, retrieval and no-harm panels are reported separately. Tool use never increases the manual legal score.",
+  "tasks": [
+    {
+      "id": "legal_01_representation",
+      "scoring": "manual_rubric",
+      "panel": "end_to_end",
+      "goldSource": "ZJS 1/2026, S. 84-92; compacted from the previously reviewed pilot rubric",
+      "majorErrorRules": ["one of the four final claimant/defendant outcomes is reversed", "a non-existent authority is relied on materially"],
+      "criteria": [
+        {"id": "claims", "weight": 3, "description": "Vier getrennte Ansprüche F gegen G, F gegen A, H gegen G und H gegen A mit jeweiligem Ergebnis", "gold": "F→G nein; F→A nein; H→G nein; H→A ja"},
+        {"id": "representation", "weight": 1, "description": "Eigene Willenserklärung und Handeln im fremden Namen nach § 164 BGB", "gold": "Preisverhandlung zeigt eigene Erklärung; Fremdbezug folgt aus den Umständen trotz eigener Unterschrift"},
+        {"id": "authority_revocation", "weight": 3, "description": "Vollmacht, Kundgabe, Erlöschen und Zugang nach §§ 167, 168, 170/171, 130 BGB", "gold": "Widerruf gegenüber F wirkt wegen Zugang im Postfach vor dem Kauf"},
+        {"id": "f_against_a", "weight": 2, "description": "Vertreterhaftung gegenüber F einschließlich § 179 Abs. 3 Satz 1 BGB", "gold": "Haftung des A scheitert am Kennenmüssen der F"},
+        {"id": "h_against_g", "weight": 2, "description": "Keine Wirkung der besonderen Kundgabe gegenüber H; Duldungs- und Anscheinsvollmacht abgelehnt", "gold": "G hatte widerrufen und informiert; Handeln war ihr bei pflichtgemäßer Sorgfalt nicht zurechenbar"},
+        {"id": "h_against_a", "weight": 2, "description": "§ 179 Abs. 1 BGB zugunsten H mit Wahlrecht und ohne Ausschluss", "gold": "A haftet H grundsätzlich auf Erfüllung oder Schadensersatz"},
+        {"id": "ratification", "weight": 1, "description": "Keine Genehmigung nach §§ 177, 182, 184 BGB", "gold": "Gs sofortige Ablehnung verhindert Genehmigung"},
+        {"id": "presentation", "weight": 1, "description": "Klare Anspruchsstruktur, belastbare Belege und knappe Kennzeichnung vertretbarer Alternativen", "gold": "Keine Punkte allein für Länge oder Toolnutzung"}
+      ]
+    },
+    {
+      "id": "legal_02_factoring",
+      "scoring": "manual_rubric",
+      "panel": "end_to_end",
+      "goldSource": "ZJS 1/2026, S. 105-112; compacted from the previously reviewed pilot rubric",
+      "majorErrorRules": ["final claim C against B is denied", "§ 816 Abs. 2 BGB is omitted as central claim basis", "a non-existent authority is relied on materially"],
+      "criteria": [
+        {"id": "claim_basis", "weight": 3, "description": "Anspruchsgrundlage § 816 Abs. 2 BGB", "gold": "C verlangt von B 50.000 Euro aus § 816 Abs. 2 BGB"},
+        {"id": "assignment", "weight": 2, "description": "Abtretung trotz Zustimmungsvorbehalt nach § 354a Abs. 1 Satz 1 HGB", "gold": "Geldforderung aus beiderseitigem Handelsgeschäft ist wirksam abgetreten"},
+        {"id": "counterclaim", "weight": 2, "description": "Gegenforderung wegen Rücktritt, Rücknahmeverweigerung und Entfernungskosten", "gold": "Schadensersatz im Rückgewährschuldverhältnis; fehlendes Vertretenmüssen für den ursprünglichen Mangel sauber trennen"},
+        {"id": "ordinary_setoff", "weight": 2, "description": "Aufrechnungslage und Grenzen der §§ 387, 406 und 407 BGB", "gold": "Gegenseitigkeit fehlt; Kenntnis der Abtretung sperrt die normalen Schutzregeln"},
+        {"id": "hgb_setoff", "weight": 3, "description": "§ 354a Abs. 1 Satz 2 HGB erfasst die Aufrechnung", "gold": "Sonderregel ermöglicht Leistung bzw. Aufrechnung gegenüber dem bisherigen Gläubiger"},
+        {"id": "non_entitled", "weight": 2, "description": "Aufrechnung als Leistung an die nichtberechtigte B", "gold": "Die Forderung der C erlischt durch das Erfüllungssurrogat gegenüber B"},
+        {"id": "amount", "weight": 1, "description": "Wertersatz nach § 818 Abs. 2 BGB", "gold": "Nominalwert 50.000 Euro"},
+        {"id": "result", "weight": 2, "description": "Eindeutiges Endergebnis", "gold": "C kann von B 50.000 Euro verlangen"},
+        {"id": "presentation", "weight": 1, "description": "Geschlossene Normenkette, klare Struktur und belastbare Belege", "gold": "Keine Punkte allein für Länge oder Toolnutzung"}
+      ]
+    },
+    {
+      "id": "legal_03_freizuegigkeit",
+      "scoring": "manual_rubric",
+      "panel": "end_to_end",
+      "goldSource": "ZJS 2/2026, S. 349-364; compacted from the previously reviewed pilot rubric",
+      "majorErrorRules": ["admissibility is denied without addressing the pre-filing completion", "the final result is stated without acknowledging the published solution or defensible alternative", "a non-existent authority is relied on materially"],
+      "criteria": [
+        {"id": "action", "weight": 3, "description": "Fortsetzungsfeststellungsklage analog § 113 Abs. 1 Satz 4 VwGO einschließlich Abgrenzung und Analogie", "gold": "Erledigung vor Klageerhebung; § 113 Abs. 1 Satz 4 VwGO analog"},
+        {"id": "admissibility", "weight": 2, "description": "Klagebefugnis, Feststellungsinteresse, Frist, Gegner sowie Beteiligungs- und Prozessfähigkeit", "gold": "Klage ist zulässig; kurzfristiger Grundrechtseingriff und Unionsrecht tragen das Interesse"},
+        {"id": "basis_form", "weight": 2, "description": "§ 6 Abs. 1 Satz 2 FreizügG/EU als Grundlage und formelle Rechtmäßigkeit", "gold": "§ 6 Abs. 8 Satz 2 betrifft die Verlustfeststellung; mündlicher Verwaltungsakt ist nicht allein deshalb formwidrig"},
+        {"id": "epidemic", "weight": 3, "description": "Krankheit mit epidemischem Potential und Verhältnis von Pandemie zu Epidemie", "gold": "Richtlinienkonforme Auslegung und Erst-recht-Schluss sprechen für das Merkmal"},
+        {"id": "individual_risk", "weight": 2, "description": "Kein individuelles Gesundheitsrisiko erforderlich", "gold": "Art. 27 Abs. 2 der Richtlinie gilt nicht entsprechend für die öffentliche Gesundheit; Inkubation und fehlende Tests sind relevant"},
+        {"id": "proportionality", "weight": 3, "description": "Ermessen sowie Geeignetheit, Erforderlichkeit und Angemessenheit", "gold": "Gesundheitsschutz, kurze Dauer und Ausnahmen gegen Belastung und mildere Mittel abwägen"},
+        {"id": "eu_freedom", "weight": 3, "description": "Anwendungsbereich und Eingriff in die passive Dienstleistungsfreiheit nach Art. 56 ff. AEUV", "gold": "Friseurbesuch ist grenzüberschreitender Dienstleistungsempfang; Diskriminierung in Rechtfertigung einordnen"},
+        {"id": "result", "weight": 2, "description": "Ergebnis und vertretbare Gegenauffassung", "gold": "Publizierte Lösung: zulässig, aber unbegründet; begründetes Gegenergebnis wird dort als vertretbar behandelt"},
+        {"id": "presentation", "weight": 1, "description": "Zulässigkeit und Begründetheit vollständig getrennt, Hilfsgutachten und belastbare Belege", "gold": "Keine Punkte allein für Länge oder Toolnutzung"}
+      ]
+    },
+    {
+      "id": "retrieval_01_bgb_130",
+      "scoring": "automatic",
+      "panel": "retrieval",
+      "checks": [
+        {"id": "citation", "weight": 1, "type": "contains_all", "values": ["§ 130", "BGB"]},
+        {"id": "sentence_one", "weight": 3, "type": "contains_normalized", "value": "Eine Willenserklärung, die einem anderen gegenüber abzugeben ist, wird, wenn sie in dessen Abwesenheit abgegeben wird, in dem Zeitpunkt wirksam, in welchem sie ihm zugeht."},
+        {"id": "sentence_two", "weight": 3, "type": "contains_normalized", "value": "Sie wird nicht wirksam, wenn dem anderen vorher oder gleichzeitig ein Widerruf zugeht."},
+        {"id": "explanation", "weight": 1, "type": "contains_all_groups", "groups": [["Abwesenheit", "Abwesenden"], ["Zugang", "zugeht"], ["Widerruf"], ["vorher", "gleichzeitig"]]},
+        {"id": "word_limit", "weight": 1, "type": "word_count", "min": 1, "max": 220}
+      ]
+    },
+    {
+      "id": "retrieval_02_incoming_bgb_399",
+      "scoring": "automatic",
+      "panel": "retrieval",
+      "checks": [
+        {"id": "exact_sources", "weight": 6, "type": "exact_result_set", "prefix": "ERGEBNIS:", "expected": ["BGB § 412", "HGB § 354a", "ZPO § 851"]},
+        {"id": "scope_caveat", "weight": 2, "type": "contains_all_groups", "groups": [["Korpus", "Datenbestand"], ["Verweis", "zitiert"], ["Anwendbarkeit", "anwendbar", "Geltung"]]},
+        {"id": "word_limit", "weight": 1, "type": "word_count", "min": 1, "max": 250}
+      ]
+    },
+    {
+      "id": "retrieval_03_ai_act_art_2",
+      "scoring": "automatic",
+      "panel": "retrieval",
+      "checks": [
+        {"id": "exact_documents", "weight": 6, "type": "exact_result_set", "prefix": "ERGEBNIS_CELEX:", "expected": ["32002L0058", "32016R0679", "32022R2065"]},
+        {"id": "document_names", "weight": 2, "type": "contains_all_groups", "groups": [["2002/58", "Datenschutzrichtlinie für elektronische Kommunikation", "ePrivacy"], ["2016/679", "Datenschutz-Grundverordnung", "DSGVO"], ["2022/2065", "Gesetz über digitale Dienste", "Digital Services Act", "DSA"]]},
+        {"id": "word_limit", "weight": 1, "type": "word_count", "min": 1, "max": 300}
+      ]
+    },
+    {
+      "id": "control_01_email",
+      "scoring": "automatic",
+      "panel": "no_harm",
+      "checks": [
+        {"id": "recipient", "weight": 1, "type": "contains_any", "values": ["Frau Keller", "Sehr geehrte Frau Keller"]},
+        {"id": "old_appointment", "weight": 2, "type": "contains_all_groups", "groups": [["23. September 2026", "23.09.2026"], ["10:00", "10.00"]]},
+        {"id": "new_appointment", "weight": 2, "type": "contains_all_groups", "groups": [["25. September 2026", "25.09.2026"], ["14:30", "14.30"]]},
+        {"id": "reason", "weight": 1, "type": "contains_any", "values": ["interne Terminkollision", "internen Terminkollision", "interne terminliche Überschneidung", "internen terminlichen Überschneidung", "interne Terminüberschneidung", "internen Terminüberschneidung"]},
+        {"id": "confirmation", "weight": 1, "type": "contains_any", "values": ["Bestätigung", "bestätigen", "passt"]},
+        {"id": "subject", "weight": 1, "type": "regex", "pattern": "(?im)^\\s*Betreff\\s*:"},
+        {"id": "word_limit", "weight": 1, "type": "word_count", "min": 70, "max": 110},
+        {"id": "no_tools", "weight": 2, "type": "tool_call_count", "max": 0}
+      ]
+    }
+  ]
+}

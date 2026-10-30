@@ -1489,6 +1489,80 @@ def test_leading_compound_title_alias_resolves_short_genitive_title():
     )
 
 
+def test_inflected_adjective_in_german_law_title_resolves_to_nominative_title():
+    source_unit = raw_unit("doc_source", "unit_source_para_1", "quelle_para_1")
+    source_chunk = raw_chunk(
+        source_unit["unit_id"],
+        "chunk_source_para_1",
+        "quelle_para_1_text",
+        "Die Pflicht folgt aus § 1 des Deutschen Richtergesetzes.",
+    )
+    target_key = "deutsches_richtergesetz"
+    target_unit = raw_unit(
+        "doc_target", "unit_target_para_1", "{}_para_1".format(target_key)
+    )
+    target_unit["document_key"] = "drig"
+    target_unit["document_global_key"] = target_key
+    target_chunk = raw_chunk(
+        target_unit["unit_id"],
+        "chunk_target_para_1",
+        "{}_para_1_text".format(target_key),
+        "Zieltext",
+    )
+    target_chunk["document_global_key"] = target_key
+    target_document = raw_document(
+        "doc_target",
+        "drig",
+        [target_unit],
+        [target_chunk],
+        title="Deutsches Richtergesetz",
+    )
+    target_document["document_global_key"] = target_key
+    target_document["global_key"] = target_key
+    graph = content_nodes.build_graph(
+        {
+            "documents": [
+                raw_document("doc_source", "quelle", [source_unit], [source_chunk]),
+                target_document,
+            ]
+        },
+        "memory",
+    )
+
+    updated = reference_relations.ReferenceExtractor(copy.deepcopy(graph)).extract()
+    matches = [
+        rel
+        for rel in updated["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["start_node_id"] == "chunk_source_para_1__doc_source"
+    ]
+
+    assert len(matches) == 1
+    assert matches[0]["properties"]["resolution_status"] == "resolved"
+    assert matches[0]["properties"]["resolved_target_global_key"] == (
+        "{}_para_1".format(target_key)
+    )
+
+
+def test_document_node_persists_normalized_and_inflected_alias_keys():
+    node = content_nodes.document_node(
+        {
+            "document_id": "doc_drig",
+            "document_key": "drig",
+            "document_global_key": "deutsches_richtergesetz",
+            "global_key": "deutsches_richtergesetz",
+            "title": "Deutsches Richtergesetz",
+            "canonical_citation": "DRiG",
+            "metadata": {"jurabk": ["DRiG"]},
+        }
+    )
+
+    aliases = set(node["properties"]["citation_alias_keys"].strip("|").split("|"))
+    assert "drig" in aliases
+    assert "deutsches_richtergesetz" in aliases
+    assert "deutschen_richtergesetz" in aliases
+
+
 def test_document_aliases_handle_hyphens_articles_and_footnote_markers():
     cases = (
         (
@@ -2035,3 +2109,314 @@ def test_internal_paragraph_reference_prefers_article_context():
     assert matches
     assert matches[0]["end_node_id"] == "chunk_egbgb_art_232_para_2__doc_egbgb"
     assert matches[0]["properties"]["target_global_key"] == "egbgb_art_232_para_2"
+
+
+def test_xml_official_abbreviation_resolves_external_article():
+    source_unit = raw_unit(
+        "doc_source",
+        "unit_source_para_1",
+        "quellgesetz_para_1",
+    )
+    source_chunk = raw_chunk(
+        source_unit["unit_id"],
+        "chunk_source_para_1",
+        "quellgesetz_para_1_text",
+        "Zur Anwendung vgl. Art. 316j StGBEG.",
+    )
+    target_key = "einfuehrungsgesetz_zum_strafgesetzbuch"
+    target_unit = raw_unit(
+        "doc_target",
+        "unit_target_art_316j",
+        "{}_art_316j".format(target_key),
+        unit_type="article",
+    )
+    target_unit["document_key"] = "egstgb"
+    target_unit["document_global_key"] = target_key
+    target_chunk = raw_chunk(
+        target_unit["unit_id"],
+        "chunk_target_art_316j",
+        "{}_art_316j_text".format(target_key),
+        "Zieltext",
+    )
+    target_chunk["document_global_key"] = target_key
+    target_document = raw_document(
+        "doc_target",
+        "egstgb",
+        [target_unit],
+        [target_chunk],
+        title="Einführungsgesetz zum Strafgesetzbuch",
+    )
+    target_document["document_global_key"] = target_key
+    target_document["global_key"] = target_key
+    target_document["metadata"]["official_abbreviation"] = "StGBEG"
+    graph = content_nodes.build_graph(
+        {
+            "documents": [
+                raw_document(
+                    "doc_source",
+                    "quellgesetz",
+                    [source_unit],
+                    [source_chunk],
+                ),
+                target_document,
+            ]
+        },
+        "memory",
+    )
+
+    updated = reference_relations.ReferenceExtractor(copy.deepcopy(graph)).extract()
+    match = next(
+        rel
+        for rel in updated["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["start_node_id"] == "chunk_source_para_1__doc_source"
+    )
+
+    assert match["properties"]["resolution_status"] == "resolved"
+    assert match["properties"]["resolved_target_global_key"] == (
+        "{}_art_316j".format(target_key)
+    )
+
+
+def test_contextual_subsection_uses_document_key_even_when_title_contains_marker():
+    document_key = "gesetz_mit_para_im_titel"
+    source_unit = raw_unit(
+        "doc_source",
+        "unit_source_para_1",
+        "{}_para_1".format(document_key),
+    )
+    source_unit["document_key"] = document_key
+    source_unit["document_global_key"] = document_key
+    target_unit = raw_unit(
+        "doc_source",
+        "unit_source_para_1_abs_2",
+        "{}_para_1_abs_2".format(document_key),
+        parent_unit_id=source_unit["unit_id"],
+        sequence=2,
+        source_order=2,
+    )
+    target_unit["document_key"] = document_key
+    target_unit["document_global_key"] = document_key
+    source_unit["child_unit_ids"] = [target_unit["unit_id"]]
+    source_chunk = raw_chunk(
+        source_unit["unit_id"],
+        "chunk_source_para_1",
+        "{}_para_1_text".format(document_key),
+        "Nach Absatz 2 gilt die Regelung.",
+    )
+    source_chunk["document_global_key"] = document_key
+    target_chunk = raw_chunk(
+        target_unit["unit_id"],
+        "chunk_source_para_1_abs_2",
+        "{}_para_1_abs_2_text".format(document_key),
+        "Zieltext",
+        sequence=2,
+    )
+    target_chunk["document_global_key"] = document_key
+    document = raw_document(
+        "doc_source",
+        document_key,
+        [source_unit, target_unit],
+        [source_chunk, target_chunk],
+    )
+
+    graph = content_nodes.build_graph({"documents": [document]}, "memory")
+    updated = reference_relations.ReferenceExtractor(copy.deepcopy(graph)).extract()
+    match = next(
+        rel
+        for rel in updated["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["start_node_id"] == "chunk_source_para_1__doc_source"
+        and rel["properties"].get("mention_text") == "Absatz 2"
+    )
+
+    assert match["properties"]["resolution_status"] == "resolved"
+    assert match["properties"]["resolved_target_global_key"] == (
+        "{}_para_1_abs_2".format(document_key)
+    )
+
+
+def test_numbered_amendment_item_scopes_bare_paragraph_to_named_act():
+    source_unit = raw_unit(
+        "doc_treaty",
+        "unit_treaty_annex_1",
+        "einigungsvertrag_anlage_1",
+        unit_type="annex",
+    )
+    source_chunk = raw_chunk(
+        source_unit["unit_id"],
+        "chunk_treaty_annex_1",
+        "einigungsvertrag_anlage_1_text",
+        "Bundesrecht wird wie folgt aufgehoben und geändert: "
+        "1. Bundeswahlgesetz in der Fassung der Bekanntmachung vom 1. September 1975 "
+        "§ 55 wird aufgehoben; § 99 bleibt unberührt.\n"
+        "2. Unbekanntes Gesetz § 4 bleibt unberührt.",
+    )
+    target_unit = raw_unit(
+        "doc_bwahlg",
+        "unit_bwahlg_para_55",
+        "bundeswahlgesetz_para_55",
+    )
+    target_unit["document_key"] = "bwahlg"
+    target_unit["document_global_key"] = "bundeswahlgesetz"
+    target_chunk = raw_chunk(
+        target_unit["unit_id"],
+        "chunk_bwahlg_para_55",
+        "bundeswahlgesetz_para_55_text",
+        "Zieltext",
+    )
+    target_chunk["document_global_key"] = "bundeswahlgesetz"
+    target_document = raw_document(
+        "doc_bwahlg",
+        "bwahlg",
+        [target_unit],
+        [target_chunk],
+        title="Bundeswahlgesetz",
+    )
+    target_document["document_global_key"] = "bundeswahlgesetz"
+    target_document["global_key"] = "bundeswahlgesetz"
+    graph = content_nodes.build_graph(
+        {
+            "documents": [
+                raw_document(
+                    "doc_treaty",
+                    "einigungsvertrag",
+                    [source_unit],
+                    [source_chunk],
+                    title="Einigungsvertrag",
+                ),
+                target_document,
+            ]
+        },
+        "memory",
+    )
+
+    updated = reference_relations.ReferenceExtractor(copy.deepcopy(graph)).extract()
+    matches = [
+        rel
+        for rel in updated["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["start_node_id"] == "chunk_treaty_annex_1__doc_treaty"
+        and rel["properties"].get("mention_text") == "§ 55"
+    ]
+
+    assert len(matches) == 1
+    assert matches[0]["properties"]["resolution_status"] == "resolved"
+    assert matches[0]["properties"]["resolved_target_global_key"] == (
+        "bundeswahlgesetz_para_55"
+    )
+    assert matches[0]["properties"]["reference_kind"] == (
+        "external_amendment_scope"
+    )
+    missing = next(
+        rel
+        for rel in updated["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["start_node_id"] == "chunk_treaty_annex_1__doc_treaty"
+        and rel["properties"].get("mention_text") == "§ 99"
+        and rel["start_node_id"].startswith("chunk_")
+    )
+    assert missing["properties"]["target_document_key"] == "einigungsvertrag"
+    assert missing["properties"]["resolution_status"] == "unresolved"
+
+
+def test_table_header_abbreviation_scopes_missing_units_to_exact_external_units():
+    table_unit = raw_unit(
+        "doc_bkatv",
+        "unit_bkatv_table",
+        "bussgeldkatalog_verordnung_anlage_tabelle_1",
+        unit_type="table",
+    )
+    table_chunk = raw_chunk(
+        table_unit["unit_id"],
+        "chunk_bkatv_table",
+        "bussgeldkatalog_verordnung_anlage_tabelle_1_rows",
+        "Tabelle: Bußgeldkatalog\n"
+        "Spaltenüberschriften: Tatbestand | Straßenverkehrs-Ordnung | (StVO) | Regelsatz\n"
+        "Zeilen 1–2:\n§ 41 Absatz 1 i. V. m. Anlage 2 lfd. Nr. 16",
+    )
+    table_chunk["chunk_type"] = "table_rows"
+    target_unit = raw_unit(
+        "doc_stvo",
+        "unit_stvo_anlage_2",
+        "strassenverkehrs_ordnung_anlage_2",
+        unit_type="annex",
+    )
+    target_unit["document_key"] = "stvo"
+    target_unit["document_global_key"] = "strassenverkehrs_ordnung"
+    target_chunk = raw_chunk(
+        target_unit["unit_id"],
+        "chunk_stvo_anlage_2",
+        "strassenverkehrs_ordnung_anlage_2_text",
+        "Zieltext",
+    )
+    target_chunk["document_global_key"] = "strassenverkehrs_ordnung"
+    target_para_unit = raw_unit(
+        "doc_stvo",
+        "unit_stvo_para_41",
+        "strassenverkehrs_ordnung_para_41",
+    )
+    target_para_unit["document_key"] = "stvo"
+    target_para_unit["document_global_key"] = "strassenverkehrs_ordnung"
+    target_para_chunk = raw_chunk(
+        target_para_unit["unit_id"],
+        "chunk_stvo_para_41",
+        "strassenverkehrs_ordnung_para_41_abs_1",
+        "Zieltext",
+    )
+    target_para_chunk["document_global_key"] = "strassenverkehrs_ordnung"
+    target_document = raw_document(
+        "doc_stvo",
+        "stvo",
+        [target_unit, target_para_unit],
+        [target_chunk, target_para_chunk],
+        title="Straßenverkehrs-Ordnung",
+    )
+    target_document["document_global_key"] = "strassenverkehrs_ordnung"
+    target_document["global_key"] = "strassenverkehrs_ordnung"
+    target_document["metadata"]["official_abbreviation"] = "StVO"
+    graph = content_nodes.build_graph(
+        {
+            "documents": [
+                raw_document(
+                    "doc_bkatv",
+                    "bussgeldkatalog_verordnung",
+                    [table_unit],
+                    [table_chunk],
+                    title="Bußgeldkatalog-Verordnung",
+                ),
+                target_document,
+            ]
+        },
+        "memory",
+    )
+
+    updated = reference_relations.ReferenceExtractor(copy.deepcopy(graph)).extract()
+    match = next(
+        rel
+        for rel in updated["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["start_node_id"] == "chunk_bkatv_table__doc_bkatv"
+        and rel["properties"].get("mention_text") == "Anlage 2"
+    )
+
+    assert match["properties"]["resolution_status"] == "resolved"
+    assert match["properties"]["resolved_target_global_key"] == (
+        "strassenverkehrs_ordnung_anlage_2"
+    )
+    assert match["properties"]["reference_kind"] == (
+        "external_table_header_context"
+    )
+    paragraph_match = next(
+        rel
+        for rel in updated["relationships"]
+        if rel["type"] == "REFERS_TO"
+        and rel["start_node_id"] == "chunk_bkatv_table__doc_bkatv"
+        and rel["properties"].get("mention_text") == "§ 41 Absatz 1"
+    )
+    assert paragraph_match["properties"]["resolved_target_global_key"] == (
+        "strassenverkehrs_ordnung_para_41_abs_1"
+    )
+    assert paragraph_match["properties"]["reference_kind"] == (
+        "external_table_header_context"
+    )

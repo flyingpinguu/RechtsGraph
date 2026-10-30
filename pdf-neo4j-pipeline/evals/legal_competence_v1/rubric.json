@@ -1,0 +1,403 @@
+{
+  "schemaVersion": 2,
+  "benchmarkId": "rechtsgraph-legal-competence-v1",
+  "frozenAsOf": "2026-09-15",
+  "scoreScale": {
+    "0": "absent, unusable, or materially wrong",
+    "1": "issue recognized but little correct analysis",
+    "2": "partly correct with an important omission or error",
+    "3": "substantially correct and useful with a limited defect",
+    "4": "complete, precise, well-applied, and professionally useful"
+  },
+  "scoringPolicy": {
+    "taskMaximum": 100,
+    "taskNormalization": "Each task is scored out of 100 before macro-averaging.",
+    "primaryMetric": "Unweighted macro-average across the assignments selected for that run; the milestone suite contains all twelve.",
+    "tieThresholdPoints": 2.0,
+    "toolUse": "Never scored. Tool traces are diagnostic only.",
+    "fatalErrorCap": 50,
+    "fatalErrorRule": "If at least one task-specific fatal error is present, the task score is capped at 50 points.",
+    "fatalErrorDecisionRule": "With one judge, a fatal-error finding is that judge's single decision. With multiple judge repeats, a strict majority is required.",
+    "judgeIndependence": "Each answer is judged pointwise without profile labels, competing answer, or tool traces."
+  },
+  "tasks": [
+    {
+      "id": "case_01_representation",
+      "family": "case_analysis",
+      "goldSource": "ZJS 1/2026, pp. 84-92",
+      "sources": [
+        "https://www.zjs-online.com/dat/artikel/2026_1_2008.pdf",
+        "https://www.gesetze-im-internet.de/bgb/"
+      ],
+      "referenceBrief": "The answer must examine four separate claims. F has no purchase-price claim against G because a communicated external power under sections 170/171 BGB no longer protects F once G's revocation reached F's post-office box before the sale; actual reading is not required for receipt. F has no section 179 claim against A because F knew or at least had to know of the lack of authority. H has no claim against G: the special communication was never made to H, and neither tolerance nor apparent authority is attributable after G revoked authority and informed partners. H can claim against A under section 179(1), subject to its statutory election, because H neither knew nor had to know of the lack of authority. A made his own declarations and the circumstances disclosed representation despite signing only his own name. G did not ratify either transaction.",
+      "acceptedAlternatives": [
+        "A carefully reasoned alternative on apparent authority may receive credit if it confronts attribution and G's precautions.",
+        "Minor differences about whether section 170 or section 171 is the best doctrinal hook are acceptable if the communication and receipt analysis is correct."
+      ],
+      "fatalErrors": [
+        {"id": "wrong_claim_map", "description": "Reverses two or more of the four final claimant-defendant outcomes."},
+        {"id": "receipt_requires_reading", "description": "Treats F's actual reading on 6 July as necessary for receipt of the revocation."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "claim_map", "weight": 20, "description": "Separates and answers F against G, F against A, H against G, and H against A.", "fullCredit": "All four claims are separately reasoned and reach F-G no, F-A no, H-G no, H-A yes."},
+        {"id": "f_g_authority", "weight": 20, "description": "Analyzes representation, communicated authority, revocation, and receipt for F.", "fullCredit": "Applies sections 164, 167/168, 170/171 and 130 BGB to the post-office-box facts and explains why F cannot rely on the former authority."},
+        {"id": "f_a_liability", "weight": 10, "description": "Analyzes A's representative liability toward F.", "fullCredit": "Applies section 179 and the knowledge or negligent-ignorance exclusion to F."},
+        {"id": "h_g_attribution", "weight": 15, "description": "Analyzes whether A's conduct binds G toward H.", "fullCredit": "Distinguishes communicated authority from tolerance/apparent authority and rejects attribution on the stated facts."},
+        {"id": "h_a_liability", "weight": 10, "description": "Analyzes A's liability toward H.", "fullCredit": "Correctly applies section 179(1), H's lack of knowledge, and the statutory election between performance and damages."},
+        {"id": "ratification_and_name", "weight": 10, "description": "Handles acting in another's name and ratification.", "fullCredit": "Explains representation from circumstances despite the signature and G's prompt refusal as no ratification."},
+        {"id": "legal_method_and_sources", "weight": 10, "description": "Uses accurate authorities and applies them to disputed facts.", "fullCredit": "Sources support the propositions; alternatives are reasoned rather than merely listed."},
+        {"id": "professional_utility", "weight": 5, "description": "Produces a clear, concise, usable answer.", "fullCredit": "The claim structure, outcomes, and residual uncertainties are immediately usable."}
+      ]
+    },
+    {
+      "id": "case_02_factoring",
+      "family": "case_analysis",
+      "goldSource": "ZJS 1/2026, pp. 105-112",
+      "sources": [
+        "https://www.zjs-online.com/dat/artikel/2026_1_2010.pdf",
+        "https://www.gesetze-im-internet.de/hgb/",
+        "https://www.gesetze-im-internet.de/bgb/"
+      ],
+      "referenceBrief": "C's central claim against B is section 816(2) BGB for 50,000 euros. The assignment of the monetary claim was effective despite the contractual consent restriction because it arose from a commercial transaction and section 354a(1) sentence 1 HGB applies. A had a counterclaim arising from the defective material and B's refusal to take it back after termination; the original defect, responsibility for it, and the later breach in the restitution relationship must be kept distinct. Ordinary debtor-protection rules under sections 406 and 407 BGB do not solve the known-assignment problem, but section 354a(1) sentence 2 HGB permits performance to the former creditor and also supports set-off as a substitute for performance. A's set-off therefore extinguished C's assigned claim by performance to non-entitled B. B must surrender the value under sections 816(2) and 818(2) BGB.",
+      "acceptedAlternatives": [
+        "Different doctrinal paths for the removal-cost counterclaim can receive credit if they separate defect liability from breach of restitution duties and reach a supportable set-off claim.",
+        "A well-supported discussion of insolvency implications may receive credit but is not a substitute for section 816(2) BGB."
+      ],
+      "fatalErrors": [
+        {"id": "denies_c_b_claim", "description": "Ultimately denies C any claim against B without a legally defensible alternative route."},
+        {"id": "misses_816_2", "description": "Omits section 816(2) BGB as the central claim basis."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "claim_and_result", "weight": 15, "description": "Identifies C's claim against B and gives a clear result.", "fullCredit": "Section 816(2) BGB, 50,000 euros, is identified and ultimately allowed."},
+        {"id": "assignment", "weight": 15, "description": "Analyzes the assignment and contractual restriction.", "fullCredit": "Correctly applies section 354a(1) sentence 1 HGB to validate assignment."},
+        {"id": "counterclaim", "weight": 15, "description": "Establishes and characterizes A's removal-cost counterclaim.", "fullCredit": "Addresses defect remedies, termination, return obligation, refusal, causation, and responsibility with a coherent basis."},
+        {"id": "setoff", "weight": 20, "description": "Analyzes set-off after notice of assignment.", "fullCredit": "Explains ordinary sections 387, 406 and 407 BGB and the special effect of section 354a(1) sentence 2 HGB."},
+        {"id": "disposition_to_nonowner", "weight": 20, "description": "Connects set-off to performance to non-entitled B and restitution.", "fullCredit": "Explains extinction of C's claim and the elements of sections 816(2), 818(2) BGB."},
+        {"id": "legal_method_and_sources", "weight": 10, "description": "Builds a closed and accurate chain of authority.", "fullCredit": "No material gap or invented source; competing doctrinal points are handled proportionately."},
+        {"id": "professional_utility", "weight": 5, "description": "Produces a structured and decision-ready answer.", "fullCredit": "The reader can see basis, chain, counterarguments, and result without reconstruction."}
+      ]
+    },
+    {
+      "id": "case_03_freizuegigkeit",
+      "family": "case_analysis",
+      "goldSource": "ZJS 2/2026, pp. 349-364",
+      "sources": [
+        "https://www.zjs-online.com/dat/artikel/2026_2_2026.pdf",
+        "https://www.gesetze-im-internet.de/freiz_gg_eu_2004/",
+        "https://www.gesetze-im-internet.de/vwgo/",
+        "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:12012E056"
+      ],
+      "referenceBrief": "The action is a continuation declaratory action by analogy with section 113(1) sentence 4 VwGO because the entry refusal ended before filing. Standing and a qualified interest follow from the short-lived serious interference and EU-law dimension; remaining procedural requirements must be addressed. Section 6(1) sentence 2 FreizügG/EU, not the loss-determination rule in subsection 8, is the substantive basis. A pandemic with local outbreaks can satisfy epidemic potential; a purposive and directive-conforming reading supports this. Individual illness is not necessarily required for a public-health restriction, but proportionality and discretion remain decisive. A receives cross-border services and can invoke Article 56 TFEU. The published solution treats the action as admissible but unfounded after proportionality review, while acknowledging a reasoned contrary result as defensible.",
+      "acceptedAlternatives": [
+        "A conclusion that the refusal was disproportionate may receive full substantive credit if it engages seriously with uncertainty, exceptions, duration, alternatives, and the public-health evidence.",
+        "A different procedural label may receive partial credit only if it correctly handles pre-filing completion and equivalent admissibility requirements."
+      ],
+      "fatalErrors": [
+        {"id": "misses_prefiling_completion", "description": "Uses an ordinary annulment action without confronting that the measure ended before filing."},
+        {"id": "ignores_eu_service_freedom", "description": "Omits the passive freedom to receive services and the EU-law justification analysis."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "procedural_vehicle", "weight": 15, "description": "Selects and explains the procedural vehicle after pre-filing completion.", "fullCredit": "Uses section 113(1) sentence 4 VwGO analogously and distinguishes alternatives."},
+        {"id": "admissibility", "weight": 10, "description": "Covers standing, qualified interest, parties, defendant, and timing.", "fullCredit": "Addresses the material admissibility requirements with fact-specific reasons."},
+        {"id": "statutory_basis", "weight": 10, "description": "Identifies the correct FreizügG/EU basis and formal issues.", "fullCredit": "Uses section 6(1) sentence 2 and avoids confusing it with subsection 8; treats oral form correctly."},
+        {"id": "health_ground", "weight": 15, "description": "Interprets epidemic potential and individual risk under EU and national law.", "fullCredit": "Uses the supplied definitions, directive context, incubation, and lack of testing in a coherent analysis."},
+        {"id": "proportionality", "weight": 15, "description": "Conducts a genuine proportionality and discretion analysis.", "fullCredit": "Weighs objective, suitability, necessity, exceptions, duration, and less restrictive alternatives."},
+        {"id": "eu_freedoms", "weight": 20, "description": "Analyzes passive services freedom, discrimination, and justification.", "fullCredit": "Correctly brings the haircut within Articles 56 et seq. TFEU and confronts nationality-based treatment."},
+        {"id": "result_and_alternatives", "weight": 5, "description": "States a supported result and recognizes the defensible counterview.", "fullCredit": "Clear result with calibrated acknowledgment of the alternative."},
+        {"id": "legal_method_and_sources", "weight": 5, "description": "Uses accurate and relevant authority.", "fullCredit": "Authorities support the propositions and current applicability is not misstated."},
+        {"id": "professional_utility", "weight": 5, "description": "Separates admissibility and merits in a usable structure.", "fullCredit": "The analysis is concise, navigable, and responsive."}
+      ]
+    },
+    {
+      "id": "case_04_criminal_image",
+      "family": "case_analysis",
+      "goldSource": "BenGER Benchathon, criminal-law task 1, CC BY 4.0",
+      "sources": [
+        "https://github.com/SebastianNagl/benger-platform",
+        "https://www.gesetze-im-internet.de/stgb/"
+      ],
+      "referenceBrief": "In the park complex, section 184k(1)(1) StGB is not fulfilled because the clothed buttocks were visible rather than protected from view; section 201a(1) lacks a protected room or helpless state and subsection 2 lacks dissemination; section 238 lacks repeated conduct. The supplied fictional section 184m must nevertheless be applied: buttocks are defined as intimate, clothing is expressly covered, following at close range and taking the photo supports immediate proximity, and there is no consent or other authorization. H also commits insult under section 185 by the degrading slur. In the police-call complex, the reference solution rejects section 164 because the alleged drunk driving was future conduct, rejects section 145 because H used the ordinary station line rather than a designated emergency call, and rejects section 145d because the alleged section 316 offense is not one of the section 126 offenses. It treats the knowingly false accusation as defamation under section 187. The section 184m offense, insult, and defamation stand in separate acts.",
+      "acceptedAlternatives": [
+        "Well-supported disagreement on whether a statement about imminent conduct is a fact for sections 164 or 187 may receive credit if statutory text, protected interests, and alternatives are analyzed.",
+        "The constitutional definiteness of 'immediate proximity' may be discussed without invalidating the supplied norm, which the prompt makes binding."
+      ],
+      "fatalErrors": [
+        {"id": "rejects_fictional_norm", "description": "Refuses to apply supplied section 184m merely because it does not exist in real law."},
+        {"id": "criminalizes_visible_photo_under_184k", "description": "Applies section 184k without confronting the requirement that the area be protected from view."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent real authority other than the expressly supplied fictional statute."}
+      ],
+      "criteria": [
+        {"id": "existing_image_offenses", "weight": 15, "description": "Analyzes sections 184k, 201a and 238 StGB.", "fullCredit": "Correctly rejects each on the relevant missing element."},
+        {"id": "fictional_184m", "weight": 25, "description": "Applies the supplied fictional section 184m using legal method.", "fullCredit": "Addresses intimate area, clothing, immediate proximity, lack of authorization, intent, and any definiteness concern."},
+        {"id": "insult", "weight": 10, "description": "Analyzes section 185 and required complaint.", "fullCredit": "Identifies the degrading direct statement as punishable insult and handles free-expression limits proportionately."},
+        {"id": "false_report_offenses", "weight": 25, "description": "Analyzes sections 164, 145, 145d, 187 and the future-act issue.", "fullCredit": "Reaches or carefully engages with the reference results for each offense."},
+        {"id": "concurrence", "weight": 10, "description": "States offense results and concurrence by act complex.", "fullCredit": "Provides a coherent final offense map and section 53 relationship."},
+        {"id": "statutory_interpretation", "weight": 10, "description": "Uses text, system, purpose and legality constraints rather than assertion.", "fullCredit": "Interpretive disputes are reasoned and tied to Article 103(2) GG or section 1 StGB where relevant."},
+        {"id": "professional_utility", "weight": 5, "description": "Produces an organized, source-accurate criminal-law opinion.", "fullCredit": "Tatkomplex structure and results are clear without irrelevant digression."}
+      ]
+    },
+    {
+      "id": "research_01_ai_act_recruiting",
+      "family": "research_advice",
+      "goldSource": "AI Act consolidated through Regulation (EU) 2026/1744; GDPR; BetrVG",
+      "sources": [
+        "https://eur-lex.europa.eu/eli/reg/2024/1689/2026-07-27/eng",
+        "https://eur-lex.europa.eu/legal-content/EN/ALL/?uri=CELEX:32026R1744",
+        "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679",
+        "https://www.gesetze-im-internet.de/betrvg/"
+      ],
+      "referenceBrief": "The CV scoring and ranking system is listed as high-risk under Article 6(2) and Annex III point 4(a) AI Act even though a recruiter makes the final decision; the human step matters for GDPR Article 22 but does not remove Annex III classification. M is normally a deployer because the vendor supplies the unchanged system under its own name, subject to reclassification if M substantially modifies or rebrands it. Regulation (EU) 2026/1744 postponed Chapter III Sections 1-3 obligations for Article 6(2)/Annex III systems until 2 December 2027, so the full high-risk deployer duties in Article 26 are not yet applicable on 1 November 2026. Article 4 AI literacy already applies. Preparatory compliance is still prudent: obtain provider documentation and registration/conformity evidence, define meaningful human oversight, logging, monitoring, incident escalation, data governance, procurement allocation, and worker information for the future Article 26 regime. An ordinary private employer is not automatically required to conduct the Article 27 fundamental-rights impact assessment. GDPR already applies: establish a lawful basis, transparency, minimization, retention and security; assess a DPIA under Article 35; Article 22 applies only if the decision is solely automated with legal or similarly significant effect, which depends on whether human review is genuine. Works-council rights, especially sections 87(1)(6), 94/95 and possibly 99 BetrVG depending on use, must be assessed before deployment.",
+      "acceptedAlternatives": [
+        "More cautious views about which BetrVG provision is triggered receive credit if the factual dependency and need for early works-council involvement are clear.",
+        "An answer may recommend a voluntary fundamental-rights assessment without incorrectly calling it legally mandatory for this private employer."
+      ],
+      "fatalErrors": [
+        {"id": "not_high_risk", "description": "States that the recruitment system is not high-risk merely because a human makes the final decision."},
+        {"id": "misses_2026_delay", "description": "States that all Annex III high-risk duties were already binding on 1 November 2026 without addressing Regulation (EU) 2026/1744."},
+        {"id": "mandatory_fria", "description": "States without qualification that Article 27 requires this ordinary private employer to conduct a fundamental-rights impact assessment."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "classification", "weight": 20, "description": "Classifies the system under Article 6 and Annex III.", "fullCredit": "Correctly identifies Annex III point 4(a), explains why human review does not remove classification, and notes any Article 6 exception only if factually supported."},
+        {"id": "timeline", "weight": 20, "description": "Distinguishes rules applicable on 1 November 2026 from postponed duties.", "fullCredit": "Accurately incorporates Regulation 2026/1744 and the 2 December 2027 date while identifying already applicable Article 4."},
+        {"id": "roles_and_ai_act_duties", "weight": 20, "description": "Determines M's role and maps current/future obligations.", "fullCredit": "Treats M as deployer, identifies reclassification risks, and accurately covers Article 26 without inventing an Article 27 duty."},
+        {"id": "adjacent_law", "weight": 15, "description": "Integrates GDPR and works-council law.", "fullCredit": "Addresses GDPR lawful basis, transparency, DPIA and meaningful human review plus relevant BetrVG participation."},
+        {"id": "implementation_plan", "weight": 15, "description": "Gives prioritized, operational next steps.", "fullCredit": "Separates launch blockers, prudent preparation, contracts, oversight, logs, documentation, monitoring, and governance."},
+        {"id": "source_integrity", "weight": 10, "description": "Uses current, verifiable primary authority.", "fullCredit": "Cites the consolidated/amending AI Act correctly and does not rely on obsolete application dates."}
+      ]
+    },
+    {
+      "id": "research_02_gdpr_breach",
+      "family": "research_advice",
+      "goldSource": "GDPR Articles 4(12), 9, 33 and 34; EDPB Guidelines 01/2021",
+      "sources": [
+        "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679",
+        "https://www.edpb.europa.eu/documents/guideline/guidelines-012021-on-examples-regarding-personal-data-breach-notification_en"
+      ],
+      "referenceBrief": "The misdirected file is a personal data breach through unauthorized disclosure under Article 4(12), and diagnoses are special-category data under Article 9. X became aware at 14:00 Monday when it had a reasonable degree of certainty; the 72-hour Article 33 window therefore runs from then. The Article 33 threshold is notification unless risk is unlikely. A single known recipient, immediate containment, written deletion confirmation and no onward disclosure materially reduce likelihood, but 120 employees plus salary and health data increase severity. A well-reasoned answer may recommend notification or a documented no-notification decision, but it must apply the correct asymmetric threshold rather than demand proof of harm. Article 34 requires communication only if high risk is likely; on the containment facts, no communication is reasonably defensible, subject to verification. X should preserve evidence, confirm deletion and lack of local/cloud copies, assess whether access occurred, involve the DPO, contain recurrence, and document facts, effects, reasoning and measures under Article 33(5) even if no notification is made. If notifying, Article 33(3) requires nature/categories/approximate numbers, DPO contact, likely consequences, and measures; phased notification is possible. The outside recipient is not a processor for this incident merely because it is a supplier.",
+      "acceptedAlternatives": [
+        "Both notification and documented non-notification can score highly if the Article 33 threshold, sensitivity, scale, trusted-recipient containment, and residual uncertainty are explicitly weighed.",
+        "A cautious conditional recommendation to notify can be professionally preferable without making notification automatic in every misdirected-email case."
+      ],
+      "fatalErrors": [
+        {"id": "no_breach", "description": "States that no personal data breach occurred because the recipient deleted the file."},
+        {"id": "wrong_threshold", "description": "Uses the high-risk Article 34 threshold for the Article 33 authority notification or treats proven misuse as required."},
+        {"id": "misses_health_data", "description": "Fails to recognize diagnoses as special-category data and therefore materially understates risk."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "qualification", "weight": 10, "description": "Qualifies the incident and data categories.", "fullCredit": "Applies Articles 4(12) and 9 and identifies confidentiality loss despite subsequent deletion."},
+        {"id": "article_33", "weight": 20, "description": "Applies Article 33 notification threshold and timing.", "fullCredit": "Uses the 'unlikely risk' exception, awareness at 14:00 Monday, 72-hour timing, and a reasoned recommendation."},
+        {"id": "article_34", "weight": 15, "description": "Separately evaluates communication to affected employees.", "fullCredit": "Uses the likely-high-risk threshold and containment facts without collapsing it into Article 33."},
+        {"id": "risk_analysis", "weight": 15, "description": "Balances likelihood and severity using the actual facts.", "fullCredit": "Weighs trusted recipient and verified containment against scale, salary data, diagnoses, and employee vulnerability."},
+        {"id": "response_actions", "weight": 15, "description": "Provides immediate containment and investigation steps.", "fullCredit": "Prioritizes evidence, recipient confirmation, copy/access checks, DPO escalation, prevention, and decision ownership."},
+        {"id": "notification_content", "weight": 10, "description": "States the content and phased-notification rules.", "fullCredit": "Accurately covers Article 33(3) and (4) without demanding unavailable precision."},
+        {"id": "documentation_and_roles", "weight": 5, "description": "Covers Article 33(5) and the parties' roles.", "fullCredit": "Requires documentation regardless of notification and does not casually label the accidental recipient a processor."},
+        {"id": "source_integrity", "weight": 5, "description": "Uses accurate GDPR and EDPB support.", "fullCredit": "Authorities are real, current, and proposition-matched."},
+        {"id": "professional_utility", "weight": 5, "description": "Produces a decision-ready incident note.", "fullCredit": "Clear recommendation, uncertainty, timeline, owner, and next steps."}
+      ]
+    },
+    {
+      "id": "document_01_employment_contract",
+      "family": "document_review",
+      "goldSource": "German Employment Contract Clauses dataset v3, CC BY-NC 4.0, plus current statutes",
+      "sources": [
+        "https://github.com/sebischair/Employment-Contract-Clauses-German",
+        "https://www.gesetze-im-internet.de/bgb/__622.html",
+        "https://www.gesetze-im-internet.de/bgb/__308.html",
+        "https://www.gesetze-im-internet.de/bgb/__309.html"
+      ],
+      "referenceBrief": "Clauses 1 through 4 present material invalidity risks as pre-formulated employment terms. Clause 1 impermissibly restricts the statutory two-week probationary notice by adding 'to month end'; section 622(3) allows termination on any day with two weeks' notice. Clause 2 is non-transparent because it does not quantify the overtime covered; a safer term must define a reasonable number or percentage and respect working-time and minimum-wage limits. Clause 3's blanket exclusion of assignment of monetary remuneration claims conflicts with section 308 no. 9(a) BGB. Clause 4 has several defects: written rather than text form, a one-month second stage below the generally required three-month minimum, and inadequate carve-outs for minimum wage and other mandatory claims plus life/body/health and gross-negligence liability. The first stage of three months and a properly designed second stage can be retained in a redraft. Clause 5 grants 30 days of annual leave on a five-day week and is not defective on the supplied facts. It is a deliberate false-positive control: the reviewer should not invent a problem merely because the other clauses are problematic. Replacements should fix, not merely delete, actual defects and must not promise certainty beyond the supplied context.",
+      "acceptedAlternatives": [
+        "A cautious classification such as 'high invalidity risk' rather than categorical invalidity is acceptable where case-law context or drafting assumptions are missing.",
+        "Different precise overtime caps may receive credit if transparent, reasonable, and accompanied by working-time and minimum-wage safeguards."
+      ],
+      "fatalErrors": [
+        {"id": "approves_blanket_assignment_ban", "description": "Approves the blanket assignment ban without confronting section 308 no. 9 BGB."},
+        {"id": "approves_unlimited_overtime", "description": "Treats unlimited unquantified overtime compensation as safely valid."},
+        {"id": "misses_short_forfeiture_stage", "description": "Approves the one-month judicial stage without identifying its duration problem."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "probation_clause", "weight": 13, "description": "Assesses and repairs the probationary notice clause.", "fullCredit": "Identifies the added month-end restriction under section 622(3) and drafts a two-week clause without a fixed termination date."},
+        {"id": "overtime_clause", "weight": 13, "description": "Assesses and repairs the overtime clause.", "fullCredit": "Explains transparency and scope defects and supplies a bounded, operational alternative."},
+        {"id": "assignment_clause", "weight": 13, "description": "Assesses and repairs the assignment clause.", "fullCredit": "Correctly applies section 308 no. 9(a) and removes the blanket monetary-claim ban."},
+        {"id": "forfeiture_clause", "weight": 18, "description": "Finds all material defects in the two-stage forfeiture term.", "fullCredit": "Covers text form, second-stage minimum, and required exclusions and drafts a coherent replacement."},
+        {"id": "redraft_quality", "weight": 13, "description": "Produces usable replacement wording rather than abstract advice.", "fullCredit": "Each replacement addresses the identified defect and remains internally consistent."},
+        {"id": "legal_precision", "weight": 10, "description": "Distinguishes invalidity, uncertainty, and drafting risk with accurate sources.", "fullCredit": "No overstatement, invented case law, or mismatch between cited rule and clause."},
+        {"id": "false_positive_control", "weight": 10, "description": "Avoids unsupported objections and weights actual risks proportionately.", "fullCredit": "Recognizes clause 5 as unobjectionable on the supplied facts and does not manufacture additional defects in order to appear thorough."},
+        {"id": "professional_utility", "weight": 10, "description": "Delivers the requested review table clearly and efficiently.", "fullCredit": "HR can identify priority, rationale, authority, and replacement for every clause."}
+      ]
+    },
+    {
+      "id": "document_02_nda_comparison",
+      "family": "document_review",
+      "goldSource": "Expert-designed reference based on GeschGehG sections 2-5 and BGB sections 305-310",
+      "sources": [
+        "https://www.gesetze-im-internet.de/geschgehg/",
+        "https://www.gesetze-im-internet.de/bgb/__307.html",
+        "https://www.gesetze-im-internet.de/bgb/__310.html"
+      ],
+      "referenceBrief": "For recipient R, B is the safer starting point but is not automatically optimal. A's definition captures public and previously known material, oral information without confirmation, and observations without boundaries, creating proof and compliance problems. Its uniform ten-year term ignores information type; the statutory trade-secret concept under section 2 no. 1 GeschGehG depends on secrecy, economic value, appropriate secrecy measures, and a legitimate interest. A's disclosure exception is too narrow because legal or administrative duties may arise without a final court order. Immediate deletion of immutable backups may be technically impossible; a segregated backup exception with continued confidentiality is sensible. A fixed 100,000-euro penalty per incident without differentiation or judicial adjustment language creates disproportionate and aggregation risk, especially as pre-formulated B2B terms remain reviewable under section 307 via section 310 BGB. B's marking mechanism can omit genuinely sensitive oral or observed information and its ten-day confirmation process needs a fallback. Three years may be too short for some non-trade-secret commercial information. The shared text-form clause expressly preserves individual agreements and is a deliberate control provision; no material defect follows from its supplied wording alone. A compromise should define information objectively, include customary exclusions and burden of proof, protect project purpose, permit need-to-know disclosures under equivalent duties, allow legally compelled disclosure with notice where lawful, address backups, use a differentiated or court-adjustable remedy, and preserve protection for qualifying trade secrets while conditions persist.",
+      "acceptedAlternatives": [
+        "A recipient may accept a broader definition than B if objective confidentiality, proof, and exclusions are made workable.",
+        "Different durations and remedy structures can score fully if commercially justified and legally calibrated."
+      ],
+      "fatalErrors": [
+        {"id": "uncritical_a", "description": "Recommends A without identifying its overbreadth, compelled-disclosure, backup, and penalty risks."},
+        {"id": "trade_secret_equals_nda", "description": "States that NDA designation alone conclusively creates a statutory trade secret."},
+        {"id": "no_b2b_control", "description": "States that pre-formulated B2B terms can never be reviewed for unfairness or transparency."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "comparison", "weight": 13, "description": "Accurately compares the operative differences between A and B.", "fullCredit": "Covers definition, marking, exclusions, duration, disclosure, deletion/backups, and remedies."},
+        {"id": "recipient_risk", "weight": 17, "description": "Prioritizes recipient-side legal and operational risk.", "fullCredit": "Separates must-fix points from negotiable commercial points and explains practical consequences."},
+        {"id": "trade_secret_law", "weight": 13, "description": "Uses GeschGehG accurately.", "fullCredit": "Explains statutory requirements, appropriate measures, permitted acquisition or exceptions where relevant, and avoids equating contract labels with statutory status."},
+        {"id": "agb_analysis", "weight": 10, "description": "Handles possible B2B standard-term review cautiously.", "fullCredit": "Correctly applies sections 307 and 310 without assuming automatic invalidity."},
+        {"id": "information_and_exceptions", "weight": 10, "description": "Designs a workable definition, exclusions, and disclosures.", "fullCredit": "Includes objective confidentiality, customary exclusions, need-to-know controls, and legally compelled disclosure."},
+        {"id": "duration_deletion_remedies", "weight": 10, "description": "Calibrates duration, backup treatment, and remedies.", "fullCredit": "Protects genuine secrets while avoiding impossible deletion and disproportionate remedy design."},
+        {"id": "compromise_clause", "weight": 12, "description": "Drafts a coherent balanced clause.", "fullCredit": "The proposed wording implements the analysis and is usable rather than a list of placeholders."},
+        {"id": "false_positive_control", "weight": 10, "description": "Avoids unsupported objections and proportionately prioritizes real drafting risks.", "fullCredit": "Does not manufacture a defect in the shared text-form clause and does not treat every difference from the preferred draft as invalidity."},
+        {"id": "professional_utility", "weight": 5, "description": "Gives a clear recommendation and negotiation order.", "fullCredit": "Management can act on the recommendation immediately."}
+      ]
+    },
+    {
+      "id": "document_03_retention_memo_audit",
+      "family": "document_review",
+      "goldSource": "GDPR Articles 17-18; HGB section 257; AO section 147; UStG section 14b",
+      "sources": [
+        "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679",
+        "https://www.gesetze-im-internet.de/hgb/__257.html",
+        "https://www.gesetze-im-internet.de/ao_1977/__147.html",
+        "https://www.gesetze-im-internet.de/ustg_1980/__14b.html"
+      ],
+      "referenceBrief": "The memo is materially wrong except for its final two control sentences. Article 17 is not absolute: Article 17(3)(b) permits processing necessary for a legal obligation and Article 17(3)(e) for legal claims. The company must still erase data no longer needed for any valid purpose and cannot use retained data for unrelated purposes. As of the reference date, section 257 HGB generally requires ten years for books and core accounting records, eight years for booking vouchers, and six years for incoming/outgoing commercial letters; section 14b UStG requires eight years for invoices, with category and transitional details checked under AO section 147. The memo reverses invoice and commercial-letter periods. A deletion request requires a category-by-category legal-basis and retention review, not deletion of all records or retention of everything. Required records should be access-restricted, purpose-limited and scheduled for deletion when the applicable period ends; data needed only for legal claims should be narrowly retained. Article 18 does provide restriction in specified cases, and operational blocking can help implement purpose limitation even where Article 18 is not itself triggered. Backups need not necessarily be selectively altered instantly if they are isolated, not routinely restored into production, governed by a documented overwrite schedule, and any restore re-applies deletions. The statements that data with no continuing purpose or retention duty should be deleted after review and that decision and execution should be documented are correct and are deliberate false-positive controls. The response to the former customer should explain what was erased, what is retained, why, and for how long.",
+      "acceptedAlternatives": [
+        "Precise AO categories or transitional periods may justify a different period for a particular document if the answer flags the dependency and does not repeat the memo's blanket claims.",
+        "The word 'blocking' need not be used if the answer gives equivalent access restriction and purpose-limitation controls."
+      ],
+      "fatalErrors": [
+        {"id": "absolute_erasure", "description": "Accepts the claim that Article 17 always overrides legal retention duties."},
+        {"id": "delete_accounting_records", "description": "Recommends immediate deletion of invoices or booking vouchers despite applicable retention duties."},
+        {"id": "wrong_periods", "description": "Repeats ten years for invoices and eight years for commercial letters as the general current rule."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "erasure_exceptions", "weight": 17, "description": "Corrects the claim that Article 17 is absolute.", "fullCredit": "Applies Article 17(3)(b) and (e) and preserves erasure for data without a valid continuing purpose."},
+        {"id": "retention_categories", "weight": 18, "description": "Maps document categories to current retention rules.", "fullCredit": "Correctly distinguishes books/core records, booking vouchers/invoices, and commercial letters with current general periods."},
+        {"id": "purpose_and_restriction", "weight": 13, "description": "Explains purpose limitation, access restriction, and Article 18 accurately.", "fullCredit": "Avoids both unrestricted continued use and the false claim that restriction is prohibited."},
+        {"id": "claims_and_minimization", "weight": 9, "description": "Handles retention for legal claims proportionately.", "fullCredit": "Uses Article 17(3)(e) narrowly, with scope, access, and deletion triggers."},
+        {"id": "backup_handling", "weight": 8, "description": "Gives a workable, legally cautious backup approach.", "fullCredit": "Addresses isolation, overwrite schedule, restore controls, and no routine use."},
+        {"id": "implementation_plan", "weight": 15, "description": "Provides a category-based response and deletion workflow.", "fullCredit": "Includes inventory, legal-basis mapping, retention schedule, production deletion, restriction, requester response, and final deletion."},
+        {"id": "source_integrity", "weight": 5, "description": "Uses accurate current primary sources.", "fullCredit": "No obsolete periods or unsupported categorical claims."},
+        {"id": "false_positive_control", "weight": 10, "description": "Distinguishes actual errors from correct control statements.", "fullCredit": "Explicitly leaves the last two sentences standing and does not recast sound deletion-review or documentation duties as defects."},
+        {"id": "professional_utility", "weight": 5, "description": "Makes every flaw and correction easy for management to act on.", "fullCredit": "Audit findings and corrected policy are concise and operational."}
+      ]
+    },
+    {
+      "id": "draft_01_digital_product_email",
+      "family": "drafting_communication",
+      "goldSource": "BGB sections 327-327s",
+      "sources": [
+        "https://www.gesetze-im-internet.de/bgb/"
+      ],
+      "referenceBrief": "The paid app is a consumer contract for a digital product under sections 327 and 327(2) BGB. Empty promised individual plans are a product defect under sections 327d and 327e. The consumer has remedies under section 327i, initially including cure under section 327l. The provider's statement that it will not repair this year can satisfy refusal or make timely cure obviously unavailable under section 327m(1), permitting termination or damages; reduction under section 327n is an alternative. Ending the whole twelve-month contract depends on severity and whether the remaining videos preserve meaningful value; section 327m(2) and, if relevant, package-contract rules require fact-sensitive treatment. Under section 327o, future payment obligations cease after effective termination and payments for defective periods are refundable, but the prompt does not establish automatic repayment of every amount previously paid during defect-free periods. The email should advise preserving support messages, declaring cure/termination clearly, setting a short fallback deadline if prudent, requesting a calculation and refund, stopping unilateral chargebacks cautiously, and supplying missing contract and payment facts.",
+      "acceptedAlternatives": [
+        "Immediate termination and a fallback demand for cure can both score fully if the provider's refusal and severity requirements are analyzed.",
+        "A partial price reduction can be recommended instead of full termination if tied to missing valuation facts."
+      ],
+      "mandatoryDeliverableElements": [
+        "A directly usable client email rather than a detached legal memorandum.",
+        "A clear recommended course of action and a legally accurate remedy sequence.",
+        "A calibrated explanation of future payments and the scope of any refund.",
+        "Concrete next steps without inventing missing contract or price-allocation facts."
+      ],
+      "fatalErrors": [
+        {"id": "unconditional_full_refund", "description": "Promises repayment of all twelve months or all historical payments without analyzing defective periods or whole-contract termination."},
+        {"id": "ignores_cure_or_refusal", "description": "Treats every defect as creating an immediate unconditional termination right without addressing cure or statutory exceptions."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "scope_and_defect", "weight": 15, "description": "Classifies the contract and identifies the product defect.", "fullCredit": "Correctly applies sections 327, 327d and 327e to the promised app function."},
+        {"id": "remedy_sequence", "weight": 20, "description": "Explains cure, refusal, termination, reduction, and damages in the right sequence.", "fullCredit": "Uses sections 327i, 327l, 327m and 327n with the provider's refusal."},
+        {"id": "whole_contract", "weight": 15, "description": "Analyzes whether the whole subscription may be ended.", "fullCredit": "Ties severity and residual value of videos to the whole-contract question instead of asserting it."},
+        {"id": "payment_effects", "weight": 15, "description": "Explains future payments and refunds accurately.", "fullCredit": "Uses section 327o, distinguishes future/defective periods, and avoids promising all historical payments."},
+        {"id": "next_steps", "weight": 15, "description": "Gives safe and concrete client actions.", "fullCredit": "Preserves evidence, frames declarations, requests cure/refund, and identifies missing valuation or contract information."},
+        {"id": "client_communication", "weight": 10, "description": "Explains law clearly to a lay client.", "fullCredit": "Plain language, calibrated confidence, concise structure, and no unexplained doctrinal dump."},
+        {"id": "source_integrity", "weight": 10, "description": "Uses the current provisions accurately.", "fullCredit": "No invented authority or materially unsupported proposition."}
+      ]
+    },
+    {
+      "id": "draft_02_laptop_demand",
+      "family": "drafting_communication",
+      "goldSource": "BGB consumer sales remedies, especially sections 437, 439, 475d and 477",
+      "sources": [
+        "https://www.gesetze-im-internet.de/bgb/"
+      ],
+      "referenceBrief": "E-GmbH, not merely the manufacturer, is V's contractual seller and warranty counterparty. Repeated shutdowns shortly after sale support a defect. Under sections 437 no. 1 and 439(1) BGB V may choose repair or replacement, subject to the seller's statutory disproportionality defenses; the seller bears necessary cure costs under section 439(2). Because the defect became apparent within one year, section 477 supports the consumer with a presumption that the goods were defective at transfer, subject to its exceptions. The letter should describe purchase and symptom, request replacement as the chosen cure, offer handover/inspection, set a concrete reasonable date or period, reject exclusive referral to the manufacturer, preserve the video and receipt, request written confirmation, and reserve reduction, termination and damages. It should not claim an unconditional immediate refund because termination normally requires failed, refused, or otherwise dispensable cure under sections 475d and 437 no. 2.",
+      "acceptedAlternatives": [
+        "A repair-first demand can still be legally sound, but it does not fully follow V's stated preference for replacement.",
+        "Different reasonable cure periods can score fully if a usable deadline is actually stated and logistics are addressed."
+      ],
+      "mandatoryDeliverableElements": [
+        "Sender and recipient placeholders and a useful subject line.",
+        "Purchase date, price, defect description, and the chosen replacement demand.",
+        "A concrete deadline plus a workable offer for handover or inspection.",
+        "Reservation of secondary rights without asserting an unconditional immediate refund.",
+        "Evidence preservation and no invented address, serial number, or contact history."
+      ],
+      "fatalErrors": [
+        {"id": "manufacturer_only", "description": "Accepts that V must pursue only the manufacturer rather than the seller."},
+        {"id": "immediate_refund", "description": "Demands immediate repayment as already due without identifying an exception to the cure requirement."},
+        {"id": "invented_facts", "description": "Inserts a fabricated address, serial number, date, or prior contact as fact."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "counterparty_and_defect", "weight": 15, "description": "Addresses the seller and states the defect accurately.", "fullCredit": "Rejects exclusive manufacturer referral and describes the documented shutdown without invented facts."},
+        {"id": "cure_right", "weight": 20, "description": "Demands the correct form of cure under sections 437 and 439.", "fullCredit": "Requests replacement as V's election, recognizes statutory limits, costs, and handover/inspection."},
+        {"id": "presumption", "weight": 10, "description": "Uses the consumer presumption appropriately.", "fullCredit": "Correctly explains section 477 without turning it into irrebuttable proof."},
+        {"id": "secondary_remedies", "weight": 15, "description": "Reserves termination, reduction, and damages without premature overclaim.", "fullCredit": "Links secondary remedies to failed/refused/dispensable cure under the proper provisions."},
+        {"id": "letter_operation", "weight": 20, "description": "Creates a genuinely sendable demand with deadline and logistics.", "fullCredit": "Contains subject, facts, specific demand, concrete deadline, handover path, confirmation request, and preserved rights."},
+        {"id": "evidence_and_tone", "weight": 10, "description": "Handles evidence and professional tone.", "fullCredit": "Mentions receipt/video retention, avoids threats, and remains concise and factual."},
+        {"id": "source_integrity", "weight": 10, "description": "Uses current consumer-sales law accurately.", "fullCredit": "No fabricated source, deadline, or absolute entitlement."}
+      ]
+    },
+    {
+      "id": "triage_01_employment_dismissal",
+      "family": "triage_judgment",
+      "goldSource": "KSchG sections 1, 4, 7 and 23; BGB section 623; BetrVG section 102; special-protection statutes",
+      "sources": [
+        "https://www.gesetze-im-internet.de/kschg/",
+        "https://www.gesetze-im-internet.de/bgb/__623.html",
+        "https://www.gesetze-im-internet.de/betrvg/__102.html",
+        "https://www.gesetze-im-internet.de/muschg_2018/__17.html",
+        "https://www.gesetze-im-internet.de/sgb_9_2018/__168.html"
+      ],
+      "referenceBrief": "This is a scored dialogue, not a one-turn answer. The first assistant turn should select a focused, non-duplicative set of decisive questions; the deterministic user then reveals only facts responsive to those questions. A last clarification round is available but should be used only if a material gap remains. The final answer must adapt to the supplied facts: the email/PDF alone does not satisfy section 623 BGB, but the wet-signed paper original likely does; access occurred no later than 15 September 2026 and a protective three-week section 4 KSchG deadline should therefore be treated as expiring on 6 October 2026. With employment since February 2022 and 34 regular employees, sections 1 and 23 KSchG apply. A stated operational reason still requires substantiation and proper social selection; the prompt does not establish either. A works council exists, but consultation under section 102 BetrVG is unknown and must be checked. The supplied facts disclose no special-protection status. The 31 October end date must be checked against section 622 and the available contract or any collective rule. The final response should preserve the original, envelope and email, recommend urgent specialist/union/legal-protection contact and protective filing, advise against signing settlement or receipt wording without review, and address continued work and registration sensibly. It must neither keep treating the paper original as form-defective nor declare the dismissal definitively valid or invalid on the unresolved operational and works-council facts.",
+      "acceptedAlternatives": [
+        "The exact trigger of section 4 KSchG where only an electronic dismissal exists is legally nuanced; full credit is available for explaining the issue while recommending filing by the earliest plausible deadline.",
+        "A short first response may omit secondary benefit-registration details if it secures the court deadline and essential facts."
+      ],
+      "fatalErrors": [
+        {"id": "misses_three_weeks", "description": "Fails to warn promptly about the potential three-week court deadline."},
+        {"id": "pdf_is_written_form", "description": "States that the emailed PDF itself satisfies section 623 BGB."},
+        {"id": "ignores_signed_original", "description": "After receiving the deterministic facts, still treats the wet-signed paper original as form-invalid merely because a PDF was also sent."},
+        {"id": "definitive_validity", "description": "Declares the dismissal definitively valid or invalid despite unresolved operational justification, social selection, works-council consultation, or notice-period facts."},
+        {"id": "fabricated_authority", "description": "Materially relies on a non-existent or materially misdescribed authority."}
+      ],
+      "criteria": [
+        {"id": "initial_question_selection", "weight": 20, "description": "Selects the legally decisive facts in the initial intake turn.", "fullCredit": "Asks about original signature and access, tenure and workforce, termination type/date/reason, works council, targeted special protection, and contract or collective terms."},
+        {"id": "question_economy", "weight": 10, "description": "Uses the limited clarification budget efficiently.", "fullCredit": "No duplicate or speculative questions, no premature merits essay, and no second round when the first answers already suffice."},
+        {"id": "fact_integration_and_adaptation", "weight": 20, "description": "Updates the final assessment in response to the deterministic answers.", "fullCredit": "Correctly integrates the signed original, access date, tenure, 34 employees, operational wording, unknown works-council consultation, absent special status, and contract uncertainty."},
+        {"id": "deadline_protection", "weight": 15, "description": "Protects the section 4 KSchG deadline on the developed facts.", "fullCredit": "Flags three weeks prominently, identifies 6 October 2026 as the protective deadline, and recommends urgent protective action."},
+        {"id": "form_and_access", "weight": 10, "description": "Distinguishes the invalid electronic transmission from the signed paper original and applies access correctly.", "fullCredit": "Does not persist with a form objection after learning of the wet signature and uses the mailbox facts cautiously."},
+        {"id": "merits_and_notice", "weight": 10, "description": "Applies general protection and notice rules without false certainty.", "fullCredit": "Recognizes KSchG coverage, identifies missing operational justification/social selection, and checks the 31 October date against contract and section 622."},
+        {"id": "works_council_and_special_protection", "weight": 5, "description": "Uses the answered collective and special-protection facts accurately.", "fullCredit": "Treats section 102 consultation as unresolved and does not invent a special-protection status."},
+        {"id": "safe_final_response", "weight": 10, "description": "Produces a concise, actionable and calibrated final response.", "fullCredit": "Preserves evidence, recommends prompt advice/protective filing, cautions against signing, and clearly separates known facts from open issues."}
+      ]
+    }
+  ]
+}

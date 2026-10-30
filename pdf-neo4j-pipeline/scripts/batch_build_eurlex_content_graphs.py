@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import sys
@@ -45,6 +46,14 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
         raise
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def build_one(task: Mapping[str, Any]) -> Dict[str, Any]:
     raw_path = Path(task["raw_path"])
     graph_path = Path(task["graph_path"])
@@ -53,15 +62,22 @@ def build_one(task: Mapping[str, Any]) -> Dict[str, Any]:
         "base_celex": task.get("base_celex"),
         "consolidated_celex": task.get("consolidated_celex"),
         "descriptor": task.get("descriptor"),
+        "source_collection": task.get("source_collection"),
+        "manifestation_format": task.get("manifestation_format"),
         "raw_path": task.get("raw_relative_path"),
         "graph_path": task.get("graph_relative_path"),
     }
     try:
+        raw_sha256 = file_sha256(raw_path)
         if graph_path.exists() and task.get("resume") and not task.get("force"):
             existing = json.loads(graph_path.read_text(encoding="utf-8"))
-            if existing.get("phase") == "content_nodes":
+            if (
+                existing.get("phase") == "content_nodes"
+                and existing.get("source_raw_sha256") == raw_sha256
+            ):
                 result.update({"status": "skipped_existing", **(existing.get("counts") or {})})
                 result["output_bytes"] = graph_path.stat().st_size
+                result["source_raw_sha256"] = raw_sha256
                 return result
         if graph_path.exists() and not task.get("force") and not task.get("resume"):
             raise FileExistsError("{} exists; use --resume or --force".format(graph_path))
@@ -72,6 +88,7 @@ def build_one(task: Mapping[str, Any]) -> Dict[str, Any]:
         graph = build_graph(raw, str(raw_path))
         atomic_write_json(graph_path, graph)
         result.update({"status": "ok", **graph["counts"], "output_bytes": graph_path.stat().st_size})
+        result["source_raw_sha256"] = raw_sha256
     except BaseException as exc:
         result.update(
             {
@@ -115,6 +132,8 @@ def main() -> None:
                 "base_celex": result.get("base_celex"),
                 "consolidated_celex": result.get("consolidated_celex"),
                 "descriptor": descriptor,
+                "source_collection": result.get("source_collection"),
+                "manifestation_format": result.get("manifestation_format"),
                 "raw_path": str(raw_path),
                 "raw_relative_path": raw_relative,
                 "graph_path": str(args.extraction_dir / graph_relative),
@@ -125,16 +144,34 @@ def main() -> None:
         )
 
     results = []
+
+    def report_progress(result: Mapping[str, Any]) -> None:
+        completed = len(results)
+        if (
+            completed % 50 == 0
+            or completed == len(tasks)
+            or result.get("status") == "error"
+        ):
+            print(
+                "[{}/{}] {} {}".format(
+                    completed,
+                    len(tasks),
+                    result.get("status"),
+                    result.get("consolidated_celex"),
+                ),
+                flush=True,
+            )
+
     if args.workers == 1:
         for task in tasks:
             results.append(build_one(task))
-            print("[{}/{}] {} {}".format(len(results), len(tasks), results[-1]["status"], results[-1]["consolidated_celex"]), flush=True)
+            report_progress(results[-1])
     else:
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
             futures = [executor.submit(build_one, task) for task in tasks]
             for future in as_completed(futures):
                 results.append(future.result())
-                print("[{}/{}] {} {}".format(len(results), len(tasks), results[-1]["status"], results[-1]["consolidated_celex"]), flush=True)
+                report_progress(results[-1])
     results.sort(key=lambda item: int(item.get("selection_index") or 0))
     statuses = Counter(item.get("status") for item in results)
     graph_manifest = {

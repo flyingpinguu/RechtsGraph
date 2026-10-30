@@ -1,0 +1,6 @@
+# Dedicated Python 3.11+ environment for the local RechtsGraph MCP server.
+mcp>=2,<3
+pymupdf
+pypdf
+pytest
+tiktoken==0.13.0

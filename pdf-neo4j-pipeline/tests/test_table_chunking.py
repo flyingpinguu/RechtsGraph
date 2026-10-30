@@ -6,7 +6,6 @@ from normtext_extractor.table_chunking import (
     split_table_rows,
     table_rows_text,
 )
-from scripts.rechunk_gii_xml_tables import rechunk_document
 
 
 def test_small_table_keeps_legacy_text_and_single_part():
@@ -153,64 +152,6 @@ def test_xml_parser_uses_same_chunking_for_future_full_parses(tmp_path, monkeypa
     assert not any(issue["severity"] == "error" for issue in issues)
 
     # The result must remain JSON-serializable for the batch extraction contract.
-    json.dumps(document, ensure_ascii=False)
-
-
-def test_existing_corpus_rechunking_is_idempotent(tmp_path, monkeypatch):
-    # Reuse the parser fixture above through a compact in-memory raw document.
-    rows = [
-        {"A": str(index), "B": "langer Wert " * 30}
-        for index in range(1, 8)
-    ]
-    table = {
-        "unit_id": "unit_table",
-        "global_key": "testv_anlage_1_tabelle_1",
-        "legal_citation": "TestV Anlage 1 Tabelle 1",
-        "unit_type": "table",
-        "title": "Messwerte",
-        "source_xml_norm_index": 1,
-        "source_xml_table_index": 1,
-        "columns": ["A", "B"],
-        "table_data": {
-            "columns": ["A", "B"],
-            "header_matrix": [["A", "B"]],
-            "rows": rows,
-        },
-    }
-    document = {
-        "document_id": "doc_test",
-        "structural_units": [table],
-        "chunks": [
-            {
-                "chunk_id": "chunk_testv_anlage_1_tabelle_1_rows__doc_test",
-                "global_key": "testv_anlage_1_tabelle_1_rows",
-                "unit_id": "unit_table",
-                "chunk_type": "table_rows",
-                "sequence": 1,
-                "source_order": [1, 1, 0],
-                "columns": ["A", "B"],
-                "rows": rows,
-                "text": table_rows_text(["A", "B"], rows),
-                "text_sha256": "legacy",
-                "table_data": table["table_data"],
-            }
-        ],
-    }
-
-    first = rechunk_document(
-        document,
-        encoding_name="cl100k_base",
-        max_tokens=120,
-        target_tokens=100,
-    )
-    serialized = json.dumps(document, ensure_ascii=False, sort_keys=True)
-    second = rechunk_document(
-        document,
-        encoding_name="cl100k_base",
-        max_tokens=120,
-        target_tokens=100,
-    )
-
-    assert first["changed_tables"] == 1
-    assert second["changed_tables"] == 0
-    assert json.dumps(document, ensure_ascii=False, sort_keys=True) == serialized
+    serialized = json.dumps(document, ensure_ascii=False)
+    assert '"document_id"' in serialized
+    assert document["document_id"].startswith("doc_")

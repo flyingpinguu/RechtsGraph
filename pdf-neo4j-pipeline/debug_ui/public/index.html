@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RechtsGraph · Agent Debugger</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">RG</span>
+        <div>
+          <h1>RechtsGraph Agent Debugger</h1>
+          <p>Codex App Server · Sol · lokaler MCP-Korpus</p>
+        </div>
+      </div>
+      <div class="runtime-strip">
+        <span id="runtime-dot" class="status-dot status-waiting"></span>
+        <span id="runtime-label">Initialisiere App Server</span>
+        <span id="runtime-profile" class="profile-pill">—</span>
+        <code id="runtime-version">—</code>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel prompt-panel">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">EINGABE</span>
+            <h2 id="conversation-heading">Neue Unterhaltung</h2>
+          </div>
+          <div class="conversation-actions">
+            <button id="new-conversation" class="text-button" type="button">Neue Unterhaltung</button>
+            <span class="security-pill">read-only · approvals never</span>
+          </div>
+        </div>
+
+        <form id="run-form">
+          <label id="prompt-label" for="prompt">Frage</label>
+          <textarea id="prompt" name="prompt" rows="7" placeholder="Zum Beispiel: Welche ausgehenden Verweise enthält § 6 der ErsatzbaustoffV und was steht in den Zielnormen?" required></textarea>
+
+          <div class="control-grid">
+            <label>
+              <span>Modell</span>
+              <select id="model" name="model"></select>
+            </label>
+            <label>
+              <span>Reasoning</span>
+              <select id="effort" name="effort"></select>
+            </label>
+            <label>
+              <span>Reasoning-Log</span>
+              <select id="summary" name="summary">
+                <option value="none">none</option>
+                <option value="concise">concise</option>
+                <option value="detailed">detailed</option>
+                <option value="auto">auto</option>
+              </select>
+            </label>
+            <label>
+              <span>Web-Policy</span>
+              <select id="web-policy" name="webPolicy">
+                <option value="optional">optional</option>
+                <option value="required">required</option>
+                <option value="forbidden">forbidden</option>
+              </select>
+            </label>
+            <label class="toggle-label">
+              <span>Netzwerkzugriff</span>
+              <input id="network-access" type="checkbox" checked>
+              <span class="toggle" aria-hidden="true"></span>
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button id="run-button" class="primary" type="submit">Unterhaltung starten</button>
+            <button id="stop-button" class="secondary danger" type="button" disabled>Unterbrechen</button>
+            <span id="form-message" role="status"></span>
+          </div>
+        </form>
+
+        <div class="answer-section">
+          <div class="section-title-row">
+            <h3>Transkript</h3>
+            <button id="copy-answer" class="text-button" type="button" disabled>Kopieren</button>
+          </div>
+          <div id="transcript" class="transcript empty-state">Noch keine Unterhaltung gestartet.</div>
+          <div id="commentary" class="commentary hidden"></div>
+          <div id="answer" class="answer hidden"></div>
+        </div>
+      </section>
+
+      <section class="debug-column">
+        <section class="panel history-panel">
+          <div class="panel-heading compact">
+            <div>
+              <span class="eyebrow">PERSISTENZ</span>
+              <h2>Gespeicherte Läufe</h2>
+            </div>
+            <button id="refresh-history" class="text-button" type="button">Aktualisieren</button>
+          </div>
+          <div id="history-list" class="history-list empty-state">Noch keine gespeicherten Läufe.</div>
+        </section>
+
+        <section class="panel run-panel">
+          <div class="panel-heading compact">
+            <div>
+              <span class="eyebrow">LAUF</span>
+              <h2>Status &amp; IDs</h2>
+            </div>
+            <span id="run-status" class="run-status idle">idle</span>
+          </div>
+          <dl class="run-facts">
+            <div><dt>Thread</dt><dd id="thread-id">—</dd></div>
+            <div><dt>Turn</dt><dd id="turn-id">—</dd></div>
+            <div><dt>Laufzeit</dt><dd id="elapsed">0.00 s</dd></div>
+            <div><dt>First token</dt><dd id="first-token">—</dd></div>
+            <div><dt>Profil</dt><dd id="run-profile">—</dd></div>
+            <div><dt>Web-Policy</dt><dd id="run-web-policy">—</dd></div>
+            <div><dt>Runden</dt><dd id="model-rounds">0</dd></div>
+            <div><dt>Items</dt><dd id="item-count">0</dd></div>
+            <div><dt>Tool-Calls</dt><dd id="tool-count">0</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel usage-panel">
+          <div class="panel-heading compact">
+            <div>
+              <span class="eyebrow">TELEMETRIE</span>
+              <h2>Tokenverbrauch</h2>
+            </div>
+            <span id="context-value" class="muted-code">Kontext —</span>
+          </div>
+          <div class="usage-grid">
+            <article><span>Letzter Modellaufruf · Input</span><strong id="tokens-input">0</strong><small id="tokens-input-total">Dieser Turn 0 · Unterhaltung 0</small></article>
+            <article><span>Letzter Modellaufruf · Cache</span><strong id="tokens-cached">0</strong><small id="tokens-cached-total">Dieser Turn 0 · Unterhaltung 0</small></article>
+            <article><span>Letzter Modellaufruf · Output</span><strong id="tokens-output">0</strong><small id="tokens-output-total">Dieser Turn 0 · Unterhaltung 0</small></article>
+            <article><span>Letzter Modellaufruf · Reasoning</span><strong id="tokens-reasoning">0</strong><small id="tokens-reasoning-total">Dieser Turn 0 · Unterhaltung 0</small></article>
+            <article class="usage-total"><span>Letzter Modellaufruf · Gesamt</span><strong id="tokens-total">0</strong><small id="tokens-grand-total">Dieser Turn 0 · Unterhaltung 0</small></article>
+          </div>
+          <div class="usage-foot"><span>Cacheanteil</span><strong id="cache-ratio">0 %</strong></div>
+          <div class="context-meter" title="Verwendeter Anteil des Modellkontexts">
+            <span id="context-meter-fill"></span>
+          </div>
+        </section>
+
+        <section class="panel diagnostics-panel">
+          <div class="panel-heading compact">
+            <div>
+              <span class="eyebrow">EFFIZIENZ</span>
+              <h2>Diagnose</h2>
+            </div>
+            <span id="diagnostic-count" class="muted-code">0 Hinweise</span>
+          </div>
+          <div id="diagnostic-summary" class="diagnostic-summary"></div>
+          <div id="diagnostic-list" class="diagnostic-list empty-state">Noch keine Diagnose.</div>
+        </section>
+
+        <section class="panel rounds-panel">
+          <div class="panel-heading compact">
+            <div>
+              <span class="eyebrow">MODELLLOOP</span>
+              <h2>Modellrunden</h2>
+            </div>
+          </div>
+          <div id="round-list" class="round-list empty-state">Noch keine Modellrunden.</div>
+        </section>
+
+        <section class="panel tools-panel">
+          <div class="panel-heading compact">
+            <div>
+              <span class="eyebrow">AKTIONEN</span>
+              <h2>Tool-Calls</h2>
+            </div>
+            <div class="filter-row">
+              <button type="button" class="filter active" data-tool-filter="all">Alle</button>
+              <button type="button" class="filter" data-tool-filter="mcpToolCall">MCP</button>
+              <button type="button" class="filter" data-tool-filter="commandExecution">Shell</button>
+            </div>
+          </div>
+          <div id="tool-list" class="tool-list empty-state">Noch keine Tool-Calls.</div>
+        </section>
+
+        <section class="panel reasoning-panel">
+          <div class="panel-heading compact">
+            <div>
+              <span class="eyebrow">MODELL</span>
+              <h2>Reasoning-Zusammenfassungen</h2>
+            </div>
+          </div>
+          <div id="reasoning-list" class="reasoning-list empty-state">Noch keine Reasoning-Events.</div>
+        </section>
+      </section>
+
+      <section class="panel event-panel">
+        <div class="panel-heading compact">
+          <div>
+            <span class="eyebrow">PROTOKOLL</span>
+            <h2>Raw event stream</h2>
+          </div>
+          <div class="event-actions">
+            <label class="inline-label">Filter <input id="event-filter" type="search" placeholder="mcpToolCall, tokenUsage …"></label>
+            <label class="check-label"><input id="auto-scroll" type="checkbox" checked> Auto-scroll</label>
+            <button id="download-events" class="text-button" type="button" disabled>JSON exportieren</button>
+            <button id="clear-events" class="text-button" type="button">Anzeige leeren</button>
+          </div>
+        </div>
+        <div id="event-stream" class="event-stream" aria-live="polite">
+          <div class="empty-state">Der vollständige App-Server-Stream erscheint hier.</div>
+        </div>
+      </section>
+    </main>
+
+    <template id="tool-template">
+      <details class="tool-card">
+        <summary>
+          <span class="tool-icon">T</span>
+          <span class="tool-main"><strong></strong><small></small></span>
+          <span class="tool-duration"></span>
+          <span class="tool-status"></span>
+        </summary>
+        <div class="tool-body">
+          <div><h4>Argumente</h4><pre class="tool-arguments"></pre></div>
+          <div><h4>Ergebnis</h4><pre class="tool-result"></pre></div>
+        </div>
+      </details>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

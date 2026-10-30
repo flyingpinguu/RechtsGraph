@@ -66,6 +66,14 @@ DEFAULT_PDF_MANIFEST = REPO_ROOT / "gesetze_im_internet_pdfs" / "manifest.json"
 DEFAULT_OUT_DIR = REPO_ROOT / "gesetze_im_internet_xml"
 
 
+def _network_error_type(exc: BaseException) -> str:
+    """Keep manifest error labels stable across supported Python versions."""
+
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return "timeout"
+    return type(exc).__name__
+
+
 class CorpusError(RuntimeError):
     """Base class for expected source, download, or validation failures."""
 
@@ -455,7 +463,7 @@ class HTTPClient:
                         url=requested_url,
                         attempt=attempt,
                         outcome="error",
-                        error_type=type(exc).__name__,
+                        error_type=_network_error_type(exc),
                         reason=str(exc),
                         failure_kind="network",
                     )
@@ -558,7 +566,7 @@ class HTTPClient:
                         url=requested_url,
                         attempt=attempt,
                         outcome="error",
-                        error_type=type(exc).__name__,
+                        error_type=_network_error_type(exc),
                         reason=str(exc),
                         failure_kind="network",
                     )

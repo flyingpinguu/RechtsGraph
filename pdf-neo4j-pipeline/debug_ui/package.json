@@ -1,0 +1,20 @@
+{
+  "name": "rechtsgraph-debug-ui",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "start:full": "RECHTSGRAPH_HARNESS_PROFILE=full node server.mjs",
+    "start:web-only": "RECHTSGRAPH_HARNESS_PROFILE=web_only node server.mjs",
+    "start:baseline": "RECHTSGRAPH_HARNESS_PROFILE=web_baseline node server.mjs",
+    "start:local-first": "RECHTSGRAPH_HARNESS_PROFILE=local_first node server.mjs",
+    "start:local-text-only": "RECHTSGRAPH_HARNESS_PROFILE=local_text_only node server.mjs",
+    "eval:paired": "node ../evals/run_paired_eval.mjs",
+    "eval:benchmark": "node ../evals/run_legal_competence_v1.mjs",
+    "eval:benchmark:technical-smoke": "node ../evals/run_benchmark_v1.mjs",
+    "eval:web-smoke": "node ../evals/run_web_capability_smoke.mjs",
+    "check": "node --check server.mjs && node --check run_model.mjs && node --check run_store.mjs && node --check profiles.mjs && node --check provider_config.mjs && node --check web_policy.mjs && node --check public/app.js && node --check ../evals/run_paired_eval.mjs && node --check ../evals/run_benchmark_v1.mjs && node --check ../evals/run_legal_competence_v1.mjs && node --check ../evals/run_web_capability_smoke.mjs && node --check ../evals/legal_competence_v1/run_judge.mjs",
+    "test": "node --test tests/*.test.mjs ../evals/tests/*.test.mjs"
+  }
+}

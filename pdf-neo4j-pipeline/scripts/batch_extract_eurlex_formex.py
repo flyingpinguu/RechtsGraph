@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Batch-extract consolidated EUR-Lex Formex packages into canonical raw JSON.
+"""Batch-extract the standard EUR-Lex corpus into canonical raw JSON.
 
 The Cellar register is produced by ``download_cellar_consolidated.py``.  This
-batch intentionally selects structured German Formex manifestations only;
-HTML/XHTML/PDF fallbacks remain explicit register entries and do not silently
-enter the XML pipeline.
+batch selects its consolidated German Formex manifestations and, by default,
+also exact referenced EU regulations and directives from
+``external_documents``.  Original acts prefer Formex and use explicit
+XHTML/PDF fallback adapters where the Publications Office offers no structured
+package.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+import sqlite3
 import sys
 import tempfile
 import time
@@ -26,13 +30,29 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 
 TOOL_NAME = "batch_extract_eurlex_formex"
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PROJECT_ROOT.parent
 DEFAULT_CORPUS_DIR = REPO_ROOT / "eurlex_consolidated_de"
 DEFAULT_REGISTER = DEFAULT_CORPUS_DIR / "register.json"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output" / "eurlex_formex_rl"
+DEFAULT_EXTERNAL_CORPUS_DIR = REPO_ROOT / "external_documents"
+DEFAULT_EXTERNAL_REGISTER = DEFAULT_EXTERNAL_CORPUS_DIR / "register.sqlite"
 DEFAULT_DESCRIPTORS = ("R", "L")
+EXTERNAL_MEDIA_FORMATS = {
+    "application/zip": "fmx4_zip",
+    "application/pdf": "pdf",
+    "application/xhtml+xml": "xhtml",
+    "text/html": "html",
+}
+EXTRACTOR_VERSIONS = {
+    "eurlex_formex": "1.1.0",
+    "eurlex_original": "1.1.0",
+}
+EXTERNAL_ACT_METADATA = {
+    "R": {"descriptor_label": "regulation", "legal_value": "REG"},
+    "L": {"descriptor_label": "directive", "legal_value": "DIR"},
+}
 
 
 def utc_now() -> str:
@@ -114,6 +134,150 @@ def select_records(
     return selected
 
 
+def select_external_legal_act_records(
+    register_path: Path,
+    corpus_dir: Path,
+    descriptors: Iterable[str],
+) -> List[Dict[str, Any]]:
+    """Select exact, locally validated referenced EU regulations/directives."""
+
+    allowed = {
+        value.upper()
+        for value in descriptors
+        if value.upper() in EXTERNAL_ACT_METADATA
+    }
+    if not allowed or not register_path.is_file():
+        return []
+    connection = sqlite3.connect(str(register_path))
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT d.id, d.title, d.short_title, d.corpus_status,
+                   f.local_path, f.media_type, f.sha256, f.download_url,
+                   f.final_url, f.retrieved_at
+            FROM documents AS d
+            JOIN files AS f ON f.document_id = d.id
+            WHERE d.corpus_status = 'downloaded_original_eu_text'
+              AND f.validation_status = 'valid'
+              AND EXISTS (
+                SELECT 1
+                FROM graph_references AS g
+                WHERE g.document_id = d.id
+                  AND g.resolution_status = 'exact_celex_downloaded'
+              )
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    priority = {"fmx4_zip": 0, "xhtml": 1, "html": 2, "pdf": 3}
+    selected_by_celex: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        celex = str(row["short_title"] or "").upper()
+        match = re.fullmatch(r"3\d{4}([A-Z])\d{4}", celex)
+        if not match or match.group(1) not in allowed:
+            continue
+        descriptor = match.group(1)
+        act_metadata = EXTERNAL_ACT_METADATA[descriptor]
+        media_type = str(row["media_type"] or "").casefold()
+        manifestation_format = EXTERNAL_MEDIA_FORMATS.get(media_type)
+        if not manifestation_format:
+            continue
+        relative = str(row["local_path"] or "")
+        if not relative:
+            continue
+        source_path = _safe_source_path(corpus_dir, relative)
+        if not source_path.is_file():
+            continue
+        record = {
+            "base_celex": celex,
+            "consolidated_celex": celex,
+            "consolidation_date": None,
+            "descriptor": descriptor,
+            "descriptor_label": act_metadata["descriptor_label"],
+            "legal_value": act_metadata["legal_value"],
+            "language": "de",
+            "status": "downloaded",
+            "manifestation_format": manifestation_format,
+            "local_path": relative,
+            "download_url": row["download_url"] or row["final_url"],
+            "title": row["title"] or celex,
+            "sha256": row["sha256"],
+            "retrieved_at": row["retrieved_at"],
+            "media_type": media_type,
+            "source_collection": "external_referenced_original",
+            "_source_root": str(corpus_dir.resolve()),
+        }
+        previous = selected_by_celex.get(celex)
+        if previous is None or priority[manifestation_format] < priority[
+            str(previous["manifestation_format"])
+        ]:
+            selected_by_celex[celex] = record
+    return sorted(selected_by_celex.values(), key=lambda record: record["base_celex"])
+
+
+def select_external_regulation_records(
+    register_path: Path,
+    corpus_dir: Path,
+    descriptors: Iterable[str],
+) -> List[Dict[str, Any]]:
+    """Compatibility wrapper retaining the former regulation-only selector."""
+
+    requested = {value.upper() for value in descriptors}
+    return select_external_legal_act_records(
+        register_path,
+        corpus_dir,
+        ["R"] if "R" in requested else [],
+    )
+
+
+def combined_records(
+    cellar_register: Mapping[str, Any],
+    *,
+    corpus_dir: Path,
+    external_register: Path,
+    external_corpus_dir: Path,
+    descriptors: Iterable[str],
+    include_external_legal_acts: bool,
+    limit: Optional[int],
+) -> List[Dict[str, Any]]:
+    records = select_records(cellar_register, descriptors, None)
+    for record in records:
+        record["source_collection"] = "cellar_consolidated"
+        record["_source_root"] = str(corpus_dir.resolve())
+    if include_external_legal_acts:
+        records.extend(
+            select_external_legal_act_records(
+                external_register,
+                external_corpus_dir,
+                descriptors,
+            )
+        )
+    records.sort(
+        key=lambda record: (
+            str(record.get("descriptor") or ""),
+            str(record.get("base_celex") or ""),
+            str(record.get("consolidation_date") or ""),
+            str(record.get("source_collection") or ""),
+        )
+    )
+    deduplicated: List[Dict[str, Any]] = []
+    seen = set()
+    for record in records:
+        key = (
+            str(record.get("base_celex") or ""),
+            str(record.get("consolidated_celex") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(record)
+    if limit is not None:
+        return deduplicated[:limit]
+    return deduplicated
+
+
 def output_path(output_dir: Path, record: Mapping[str, Any]) -> Path:
     descriptor = str(record.get("descriptor") or "_")
     celex = str(record.get("consolidated_celex") or record.get("base_celex") or "unknown")
@@ -129,9 +293,9 @@ def _summary(payload: Mapping[str, Any], path: Path, output_dir: Path) -> Dict[s
         "document_global_key": document.get("document_global_key"),
         "structural_units": len(document.get("structural_units") or []),
         "chunks": len(document.get("chunks") or []),
-        "articles": metadata.get("xml_article_count", 0),
-        "annexes": metadata.get("xml_annex_count", 0),
-        "tables": metadata.get("xml_table_count", 0),
+        "articles": metadata.get("xml_article_count", metadata.get("article_count", 0)),
+        "annexes": metadata.get("xml_annex_count", metadata.get("annex_count", 0)),
+        "tables": metadata.get("xml_table_count", metadata.get("table_count", 0)),
         "issues": len(payload.get("extraction_issues") or []),
         "output_path": path.resolve().relative_to(output_dir.resolve()).as_posix(),
         "output_bytes": path.stat().st_size,
@@ -149,14 +313,15 @@ def _valid_resume(
     except (OSError, ValueError, json.JSONDecodeError):
         return None
     extractor = payload.get("extractor") or {}
-    if extractor != {"name": "eurlex_formex", "version": "1.0.0"}:
+    if extractor.get("version") != EXTRACTOR_VERSIONS.get(extractor.get("name")):
         return None
     source = payload.get("source_manifest_entry") or {}
     if source.get("consolidated_celex") != record.get("consolidated_celex"):
         return None
     document = (payload.get("documents") or [{}])[0]
     metadata = document.get("metadata") or {}
-    if metadata.get("source_package_sha256") != file_sha256(source_path):
+    recorded_hash = metadata.get("source_package_sha256") or metadata.get("source_file_sha256")
+    if recorded_hash != file_sha256(source_path):
         return None
     return payload
 
@@ -172,6 +337,8 @@ def extract_one(task: Mapping[str, Any]) -> Dict[str, Any]:
         "base_celex": record.get("base_celex"),
         "consolidated_celex": record.get("consolidated_celex"),
         "descriptor": record.get("descriptor"),
+        "source_collection": record.get("source_collection"),
+        "manifestation_format": record.get("manifestation_format"),
         "source_path": record.get("local_path"),
     }
     try:
@@ -189,14 +356,25 @@ def extract_one(task: Mapping[str, Any]) -> Dict[str, Any]:
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
         sys.path.insert(0, str(PROJECT_ROOT))
-        from normtext_extractor.eurlex_formex import (  # noqa: WPS433
-            EURLEX_FORMEX_EXTRACTOR_VERSION,
-            extract_package,
-        )
+        public_record = {key: value for key, value in record.items() if not key.startswith("_")}
+        if record.get("manifestation_format") == "fmx4_zip":
+            from normtext_extractor.eurlex_formex import (  # noqa: WPS433
+                EURLEX_FORMEX_EXTRACTOR_VERSION,
+                extract_package,
+            )
 
-        if EURLEX_FORMEX_EXTRACTOR_VERSION != "1.0.0":
-            raise RuntimeError("unexpected Formex extractor version")
-        payload = extract_package(source_path, record)
+            if EURLEX_FORMEX_EXTRACTOR_VERSION != EXTRACTOR_VERSIONS["eurlex_formex"]:
+                raise RuntimeError("unexpected Formex extractor version")
+            payload = extract_package(source_path, public_record)
+        else:
+            from normtext_extractor.eurlex_original import (  # noqa: WPS433
+                EURLEX_ORIGINAL_EXTRACTOR_VERSION,
+                extract_source,
+            )
+
+            if EURLEX_ORIGINAL_EXTRACTOR_VERSION != EXTRACTOR_VERSIONS["eurlex_original"]:
+                raise RuntimeError("unexpected original EUR-Lex extractor version")
+            payload = extract_source(source_path, public_record)
         payload["batch_extractor"] = {"name": TOOL_NAME, "version": TOOL_VERSION}
         atomic_write_json(destination, payload)
         result.update({"status": "ok", **_summary(payload, destination, output_dir)})
@@ -216,7 +394,9 @@ def extract_one(task: Mapping[str, Any]) -> Dict[str, Any]:
 def build_manifest(
     *,
     register_path: Path,
+    external_register_path: Path,
     corpus_dir: Path,
+    external_corpus_dir: Path,
     output_dir: Path,
     descriptors: Sequence[str],
     workers: int,
@@ -225,6 +405,8 @@ def build_manifest(
 ) -> Dict[str, Any]:
     status_counts = Counter(str(result.get("status") or "unknown") for result in results)
     descriptor_counts = Counter(str(result.get("descriptor") or "unknown") for result in results)
+    source_counts = Counter(str(result.get("source_collection") or "unknown") for result in results)
+    format_counts = Counter(str(result.get("manifestation_format") or "unknown") for result in results)
     successful = [result for result in results if result.get("status") in {"ok", "skipped_existing"}]
     return {
         "schema_version": "1.0",
@@ -232,7 +414,9 @@ def build_manifest(
         "started_at": started_at,
         "completed_at": utc_now(),
         "register_path": str(register_path),
+        "external_register_path": str(external_register_path),
         "corpus_dir": str(corpus_dir),
+        "external_corpus_dir": str(external_corpus_dir),
         "output_dir": str(output_dir),
         "descriptors": list(descriptors),
         "workers": workers,
@@ -241,6 +425,8 @@ def build_manifest(
             "successful": len(successful),
             "status_counts": dict(sorted(status_counts.items())),
             "descriptor_counts": dict(sorted(descriptor_counts.items())),
+            "source_counts": dict(sorted(source_counts.items())),
+            "manifestation_format_counts": dict(sorted(format_counts.items())),
             "structural_units": sum(int(item.get("structural_units") or 0) for item in successful),
             "chunks": sum(int(item.get("chunks") or 0) for item in successful),
             "articles": sum(int(item.get("articles") or 0) for item in successful),
@@ -257,12 +443,24 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--register", type=Path, default=DEFAULT_REGISTER)
     parser.add_argument("--corpus-dir", type=Path, default=DEFAULT_CORPUS_DIR)
+    parser.add_argument("--external-register", type=Path, default=DEFAULT_EXTERNAL_REGISTER)
+    parser.add_argument("--external-corpus-dir", type=Path, default=DEFAULT_EXTERNAL_CORPUS_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--descriptors", nargs="+", default=list(DEFAULT_DESCRIPTORS))
     parser.add_argument("--workers", type=int, default=max(1, min(4, os.cpu_count() or 1)))
     parser.add_argument("--limit", type=int)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--no-external-legal-acts",
+        action="store_true",
+        help="Exclude exact referenced regulations/directives from external_documents.",
+    )
+    parser.add_argument(
+        "--no-external-regulations",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args()
 
 
@@ -282,13 +480,24 @@ def main() -> None:
 
         started_at = utc_now()
         register = load_json(args.register)
-        records = select_records(register, args.descriptors, args.limit)
+        records = combined_records(
+            register,
+            corpus_dir=args.corpus_dir,
+            external_register=args.external_register,
+            external_corpus_dir=args.external_corpus_dir,
+            descriptors=args.descriptors,
+            include_external_legal_acts=not (
+                args.no_external_legal_acts or args.no_external_regulations
+            ),
+            limit=args.limit,
+        )
         tasks = []
         for index, record in enumerate(records):
             local_path = str(record.get("local_path") or "")
             if not local_path:
                 continue
-            source = _safe_source_path(args.corpus_dir, local_path)
+            source_root = Path(str(record.get("_source_root") or args.corpus_dir))
+            source = _safe_source_path(source_root, local_path)
             tasks.append(
                 {
                     "selection_index": index,
@@ -302,32 +511,42 @@ def main() -> None:
             )
 
         results: List[Dict[str, Any]] = []
+
+        def report_progress(result: Mapping[str, Any]) -> None:
+            completed = len(results)
+            if (
+                completed % 50 == 0
+                or completed == len(tasks)
+                or result.get("status") == "error"
+            ):
+                print(
+                    "[{}/{}] {} {}".format(
+                        completed,
+                        len(tasks),
+                        result.get("status"),
+                        result.get("consolidated_celex"),
+                    ),
+                    flush=True,
+                )
+
         if args.workers == 1:
             for task in tasks:
                 result = extract_one(task)
                 results.append(result)
-                print(
-                    "[{}/{}] {} {}".format(
-                        len(results), len(tasks), result.get("status"), result.get("consolidated_celex")
-                    ),
-                    flush=True,
-                )
+                report_progress(result)
         else:
             with ProcessPoolExecutor(max_workers=args.workers) as executor:
                 futures = {executor.submit(extract_one, task): task for task in tasks}
                 for future in as_completed(futures):
                     result = future.result()
                     results.append(result)
-                    print(
-                        "[{}/{}] {} {}".format(
-                            len(results), len(tasks), result.get("status"), result.get("consolidated_celex")
-                        ),
-                        flush=True,
-                    )
+                    report_progress(result)
         results.sort(key=lambda item: int(item.get("selection_index") or 0))
         manifest = build_manifest(
             register_path=args.register,
+            external_register_path=args.external_register,
             corpus_dir=args.corpus_dir,
+            external_corpus_dir=args.external_corpus_dir,
             output_dir=args.output_dir,
             descriptors=args.descriptors,
             workers=args.workers,

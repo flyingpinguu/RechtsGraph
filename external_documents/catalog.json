@@ -1,0 +1,423 @@
+{
+  "schema_version": "1.0",
+  "scope": {
+    "description": "Amtliche oder autoritative Zusatzdokumente für RechtsGraph, priorisiert nach Verweisen aus dem deutschen und europäischen Rechtskorpus.",
+    "case_law_included": false,
+    "selection_rules": [
+      "Amtliche frei zugängliche Volltexte werden lokal archiviert.",
+      "Kostenpflichtige oder lizenzierte Volltexte werden nur als Metadaten registriert.",
+      "Dokumente, die bereits im deutschen oder im konsolidierten EU-Korpus liegen, werden nicht dupliziert.",
+      "Historische und generische Verweise werden registriert, aber nicht blind heruntergeladen."
+    ]
+  },
+  "documents": [
+    {
+      "id": "adr_2025",
+      "title": "Agreement concerning the International Carriage of Dangerous Goods by Road (ADR 2025)",
+      "short_title": "ADR 2025",
+      "document_type": "international_dangerous_goods_regulation",
+      "category": "dangerous_goods_road",
+      "jurisdiction": "international",
+      "authority": "UNECE",
+      "edition": "2025",
+      "language": "en",
+      "valid_from": "2025-01-01",
+      "priority": "A",
+      "access_status": "public_consultation_copy",
+      "landing_url": "https://unece.org/info/Transport/pub/395786",
+      "license_note": "Non-editable UN consultation copy; do not republish without checking UN rights and permissions.",
+      "aliases": ["ADR", "ADR 2025", "ECE/TRANS/352"],
+      "files": [
+        {
+          "role": "volume_1",
+          "local_path": "documents/dangerous_goods/adr_2025/adr_2025_vol_1_en.pdf",
+          "download_url": "https://unece.org/sites/default/files/2025-01/2412006_E_ECE_TRANS_352_Vol.I_WEB_0.pdf",
+          "media_type": "application/pdf"
+        },
+        {
+          "role": "volume_2",
+          "local_path": "documents/dangerous_goods/adr_2025/adr_2025_vol_2_en.pdf",
+          "download_url": "https://unece.org/sites/default/files/2025-01/2412010_E_ECE_TRANS_352_Vol.II_WEB.pdf",
+          "media_type": "application/pdf"
+        },
+        {
+          "role": "corrigendum_1",
+          "local_path": "documents/dangerous_goods/adr_2025/adr_2025_corrigendum_1_en.pdf",
+          "download_url": "https://unece.org/sites/default/files/2024-10/ECE-TRANS-352c1E.pdf",
+          "media_type": "application/pdf"
+        },
+        {
+          "role": "corrigendum_2",
+          "local_path": "documents/dangerous_goods/adr_2025/adr_2025_corrigendum_2_en.pdf",
+          "download_url": "https://unece.org/sites/default/files/2025-11/ECE-TRANS-352c2e%20%282%29.pdf",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "adr_2025_changes_de",
+      "title": "Änderungen 2025 zum ADR – deutsche Übersetzung",
+      "short_title": "ADR-Änderungen 2025 (DE)",
+      "document_type": "official_translation_amendments",
+      "category": "dangerous_goods_road",
+      "jurisdiction": "DE",
+      "authority": "Bundesministerium für Verkehr",
+      "edition": "2025",
+      "language": "de",
+      "valid_from": "2025-01-01",
+      "priority": "A",
+      "access_status": "public_official_document",
+      "landing_url": "https://www.bmv.de/SharedDocs/DE/Anlage/G/Gefahrengut/adr-aenderungen-2025.html",
+      "notes": "Dies ist nur die amtliche deutsche Änderungsübersetzung, nicht der vollständige konsolidierte ADR-Text.",
+      "aliases": ["ADR Änderungen 2025", "30. ADR-Änderungsverordnung"],
+      "files": [
+        {
+          "role": "amendments",
+          "local_path": "documents/dangerous_goods/adr_2025/adr_changes_2025_de.pdf",
+          "download_url": "https://www.bmv.de/SharedDocs/DE/Anlage/G/Gefahrengut/adr-aenderungen-2025.pdf?__blob=publicationFile",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "rid_2025_de",
+      "title": "Ordnung für die internationale Eisenbahnbeförderung gefährlicher Güter (RID 2025)",
+      "short_title": "RID 2025",
+      "document_type": "international_dangerous_goods_regulation",
+      "category": "dangerous_goods_rail",
+      "jurisdiction": "international",
+      "authority": "OTIF",
+      "edition": "2025",
+      "language": "de",
+      "valid_from": "2025-01-01",
+      "priority": "A",
+      "access_status": "public_official_document",
+      "landing_url": "https://otif.org/de/?page_id=174",
+      "aliases": ["RID", "RID 2025"],
+      "files": [
+        {
+          "role": "full_text",
+          "local_path": "documents/dangerous_goods/rid_2025/rid_2025_de.pdf",
+          "download_url": "https://otif.org/fileadmin/docs/LegalTexts/COTIF/DangerousGoodsRID/RID/RID_2025_d_1_January_2025.pdf",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "adn_2025_de",
+      "title": "Europäisches Übereinkommen über die internationale Beförderung gefährlicher Güter auf Binnenwasserstraßen (ADN 2025)",
+      "short_title": "ADN 2025",
+      "document_type": "international_dangerous_goods_regulation",
+      "category": "dangerous_goods_inland_waterways",
+      "jurisdiction": "international",
+      "authority": "Zentralkommission für die Rheinschifffahrt",
+      "edition": "2025",
+      "language": "de",
+      "valid_from": "2025-01-01",
+      "priority": "A",
+      "access_status": "public_official_document",
+      "landing_url": "https://www.ccr-zkr.org/13020300-de.html",
+      "aliases": ["ADN", "ADN 2025"],
+      "files": [
+        {
+          "role": "full_text",
+          "local_path": "documents/dangerous_goods/adn_2025/adn_2025_de.pdf",
+          "download_url": "https://www.ccr-zkr.org/files/conventions/adn/ADN_2025de.pdf",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "un_model_regulations_rev24_en",
+      "title": "UN Recommendations on the Transport of Dangerous Goods – Model Regulations, Revision 24",
+      "short_title": "UN Model Regulations Rev. 24",
+      "document_type": "international_model_regulation",
+      "category": "dangerous_goods_general",
+      "jurisdiction": "international",
+      "authority": "UNECE",
+      "edition": "Revision 24 (2025)",
+      "language": "en",
+      "priority": "B",
+      "access_status": "public_consultation_copy",
+      "landing_url": "https://unece.org/transport/dangerous-goods/un-model-regulations-rev-24",
+      "license_note": "Non-editable UN consultation copy; do not republish without checking UN rights and permissions.",
+      "aliases": ["UN Model Regulations", "UN-Modellvorschriften", "Orange Book", "ST/SG/AC.10/1/Rev.24"],
+      "files": [
+        {
+          "role": "volume_1",
+          "local_path": "documents/dangerous_goods/un_model_regulations_rev24/un_model_regulations_rev24_vol_1_en.pdf",
+          "download_url": "https://unece.org/sites/default/files/2025-09/ST_SG_AC10_1_Rev24e_Vol%20I_1.pdf",
+          "media_type": "application/pdf"
+        },
+        {
+          "role": "volume_2",
+          "local_path": "documents/dangerous_goods/un_model_regulations_rev24/un_model_regulations_rev24_vol_2_en.pdf",
+          "download_url": "https://unece.org/sites/default/files/2025-09/ST_SG_AC10_1_Rev24e_Vol_II_1.pdf",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "un_manual_tests_rev8_en",
+      "title": "UN Manual of Tests and Criteria, Revision 8 with Amendment 1",
+      "short_title": "UN Manual of Tests and Criteria Rev. 8",
+      "document_type": "technical_test_manual",
+      "category": "dangerous_goods_general",
+      "jurisdiction": "international",
+      "authority": "UNECE",
+      "edition": "Revision 8 (2023), Amendment 1 (2025)",
+      "language": "en",
+      "priority": "B",
+      "access_status": "public_consultation_copy",
+      "landing_url": "https://unece.org/transport/dangerous-goods/rev8-files",
+      "license_note": "Free non-editable consultation copies; do not republish without checking UN rights and permissions.",
+      "aliases": ["UN Manual of Tests and Criteria", "ST/SG/AC.10/11/Rev.8"],
+      "files": [
+        {
+          "role": "base_text",
+          "local_path": "documents/dangerous_goods/un_manual_tests_rev8/un_manual_tests_rev8_en.pdf",
+          "download_url": "https://unece.org/sites/default/files/2024-09/ST_SG_AC.10_11_Rev.8e_WEB.pdf",
+          "media_type": "application/pdf"
+        },
+        {
+          "role": "amendment_1",
+          "local_path": "documents/dangerous_goods/un_manual_tests_rev8/un_manual_tests_rev8_amendment_1_en.pdf",
+          "download_url": "https://unece.org/sites/default/files/2025-09/ST-SG-AC10-11-Rev8-Amend1e.pdf",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "un_ghs_rev11_en",
+      "title": "Globally Harmonized System of Classification and Labelling of Chemicals, Revision 11",
+      "short_title": "UN GHS Rev. 11",
+      "document_type": "international_classification_system",
+      "category": "chemicals",
+      "jurisdiction": "international",
+      "authority": "UNECE",
+      "edition": "Revision 11 (2025)",
+      "language": "en",
+      "priority": "B",
+      "access_status": "public_consultation_copy",
+      "landing_url": "https://unece.org/transport/documents/2025/09/standards/globally-harmonized-system-classification-and-labelling",
+      "license_note": "Non-editable UN consultation copy; do not republish without checking UN rights and permissions.",
+      "aliases": ["GHS", "UN GHS", "Purple Book", "ST/SG/AC.10/30/Rev.11"],
+      "files": [
+        {
+          "role": "full_text",
+          "local_path": "documents/chemicals/un_ghs_rev11/un_ghs_rev11_en.pdf",
+          "download_url": "https://unece.org/sites/default/files/2025-09/GHS%20Rev11e.pdf",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "imdg_code_42_24",
+      "title": "International Maritime Dangerous Goods Code, Amendment 42-24",
+      "short_title": "IMDG Code 42-24",
+      "document_type": "international_dangerous_goods_regulation",
+      "category": "dangerous_goods_maritime",
+      "jurisdiction": "international",
+      "authority": "International Maritime Organization",
+      "edition": "Amendment 42-24 (2024)",
+      "language": "en",
+      "valid_from": "2026-01-01",
+      "priority": "A",
+      "access_status": "paid_full_text_with_public_supplement",
+      "landing_url": "https://www.imo.org/en/publications/pages/imdg%20code.aspx",
+      "license_note": "The full IMDG Code is an IMO sales publication and is not downloaded.",
+      "aliases": ["IMDG Code", "IMDG-Code", "IMDG 42-24"],
+      "files": [
+        {
+          "role": "official_errata",
+          "local_path": "documents/dangerous_goods/imdg_code_42_24/imdg_42_24_errata_en.pdf",
+          "download_url": "https://wwwcdn.imo.org/localresources/en/publications/Documents/Supplements/English/QO200E_errata_December2025_PQ.pdf",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "icao_ti_2025_2026",
+      "title": "Technical Instructions for the Safe Transport of Dangerous Goods by Air (Doc 9284), 2025–2026 Edition",
+      "short_title": "ICAO Technical Instructions 2025–2026",
+      "document_type": "international_dangerous_goods_regulation",
+      "category": "dangerous_goods_air",
+      "jurisdiction": "international",
+      "authority": "ICAO",
+      "edition": "2025–2026",
+      "language": "en",
+      "valid_from": "2025-01-01",
+      "valid_to": "2026-12-31",
+      "priority": "B",
+      "access_status": "paid_full_text_with_public_supplement",
+      "landing_url": "https://www.icao.int/Dangerous-Goods/Technical-Instructions",
+      "license_note": "The complete Doc 9284 is sold by ICAO and is not downloaded.",
+      "aliases": ["ICAO TI", "ICAO Technical Instructions", "Doc 9284"],
+      "files": [
+        {
+          "role": "official_addendum_1",
+          "local_path": "documents/dangerous_goods/icao_ti_2025_2026/icao_doc_9284_addendum_1_en.pdf",
+          "download_url": "https://www.icao.int/sites/default/files/publications/DocSeries/9284_2025_2026_add_01_en.pdf",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "iata_dgr_67",
+      "title": "IATA Dangerous Goods Regulations, 67th Edition",
+      "short_title": "IATA DGR 67",
+      "document_type": "industry_dangerous_goods_standard",
+      "category": "dangerous_goods_air",
+      "jurisdiction": "international",
+      "authority": "IATA",
+      "edition": "67 (2026)",
+      "language": "en",
+      "valid_from": "2026-01-01",
+      "valid_to": "2026-12-31",
+      "priority": "B",
+      "access_status": "paid_full_text_with_public_supplements",
+      "landing_url": "https://www.iata.org/en/programs/cargo/dgr/",
+      "license_note": "The complete IATA DGR is a commercial publication and is not downloaded.",
+      "aliases": ["IATA DGR", "Dangerous Goods Regulations"],
+      "files": [
+        {
+          "role": "significant_changes",
+          "local_path": "documents/dangerous_goods/iata_dgr_67/iata_dgr_67_significant_changes_en.pdf",
+          "download_url": "https://www.iata.org/contentassets/b08040a138dc4442a4f066e6fb99fe2a/dgr-67-en-significant-changes.pdf",
+          "media_type": "application/pdf"
+        },
+        {
+          "role": "addendum_1",
+          "local_path": "documents/dangerous_goods/iata_dgr_67/iata_dgr_67_addendum_1_en.pdf",
+          "download_url": "https://www.iata.org/contentassets/90f8038b0eea42069554b2f4530f49ea/dgr-67-addendum-1---en---01-january-2026.pdf",
+          "media_type": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": "baua_trgs_current",
+      "title": "Geltende Technische Regeln für Gefahrstoffe",
+      "short_title": "TRGS (aktuelle Sammlung)",
+      "document_type": "official_technical_rules_collection",
+      "category": "occupational_safety",
+      "jurisdiction": "DE",
+      "authority": "Bundesanstalt für Arbeitsschutz und Arbeitsmedizin",
+      "language": "de",
+      "priority": "A",
+      "access_status": "public_official_collection",
+      "landing_url": "https://www.baua.de/DE/Angebote/Regelwerk/TRGS/TRGS",
+      "aliases": ["TRGS", "Technische Regeln für Gefahrstoffe"],
+      "files": [
+        {
+          "role": "complete_collection",
+          "local_path": "documents/technical_rules/baua_trgs/trgs_current_de.zip",
+          "download_url": "https://www.baua.de/media/BAuAInternet/download/TRGS.zip",
+          "media_type": "application/zip",
+          "expand_zip": true
+        }
+      ]
+    },
+    {
+      "id": "baua_trbs_current",
+      "title": "Geltende Technische Regeln für Betriebssicherheit",
+      "short_title": "TRBS (aktuelle Sammlung)",
+      "document_type": "official_technical_rules_collection",
+      "category": "occupational_safety",
+      "jurisdiction": "DE",
+      "authority": "Bundesanstalt für Arbeitsschutz und Arbeitsmedizin",
+      "language": "de",
+      "priority": "C",
+      "access_status": "official_landing_only",
+      "landing_url": "https://www.baua.de/DE/Angebote/Regelwerk/TRBS/TRBS",
+      "aliases": ["TRBS", "Technische Regeln für Betriebssicherheit"],
+      "notes": "Im aktuellen Graph-Inventar wurde keine konkrete TRBS-Zitation gefunden; die amtliche Übersicht ist registriert."
+    },
+    {
+      "id": "baua_trba_current",
+      "title": "Geltende Technische Regeln für Biologische Arbeitsstoffe",
+      "short_title": "TRBA (aktuelle Sammlung)",
+      "document_type": "official_technical_rules_collection",
+      "category": "occupational_safety",
+      "jurisdiction": "DE",
+      "authority": "Bundesanstalt für Arbeitsschutz und Arbeitsmedizin",
+      "language": "de",
+      "priority": "C",
+      "access_status": "official_landing_only",
+      "landing_url": "https://www.baua.de/DE/Angebote/Regelwerk/TRBA/TRBA",
+      "aliases": ["TRBA", "Technische Regeln für Biologische Arbeitsstoffe"],
+      "notes": "Im aktuellen Graph-Inventar wurde keine konkrete TRBA-Zitation gefunden; die amtliche Übersicht ist registriert."
+    },
+    {
+      "id": "baua_asr_current",
+      "title": "Geltende Technische Regeln für Arbeitsstätten",
+      "short_title": "ASR (aktuelle Sammlung)",
+      "document_type": "official_technical_rules_collection",
+      "category": "occupational_safety",
+      "jurisdiction": "DE",
+      "authority": "Bundesanstalt für Arbeitsschutz und Arbeitsmedizin",
+      "language": "de",
+      "priority": "C",
+      "access_status": "public_official_collection",
+      "landing_url": "https://www.baua.de/DE/Angebote/Regelwerk/ASR/ASR",
+      "aliases": ["ASR", "Technische Regeln für Arbeitsstätten"],
+      "notes": "Im aktuellen Graph-Inventar wurde keine konkrete ASR-Zitation gefunden; die amtliche aktuelle Sammlung wird vorsorglich archiviert.",
+      "files": [
+        {
+          "role": "complete_collection",
+          "local_path": "documents/technical_rules/baua_asr/asr_current_de.zip",
+          "download_url": "https://www.baua.de/media/BAuAInternet/download/ASR.zip",
+          "media_type": "application/zip",
+          "expand_zip": true
+        }
+      ]
+    },
+    {
+      "id": "dguv_vorschrift_2",
+      "title": "DGUV Vorschrift 2 – Betriebsärztinnen und Betriebsärzte sowie Fachkräfte für Arbeitssicherheit",
+      "short_title": "DGUV Vorschrift 2",
+      "document_type": "accident_prevention_regulation",
+      "category": "occupational_safety",
+      "jurisdiction": "DE",
+      "authority": "Deutsche Gesetzliche Unfallversicherung",
+      "edition": "Mustertext 2024",
+      "language": "de",
+      "priority": "C",
+      "access_status": "carrier_specific_versions",
+      "landing_url": "https://publikationen.dguv.de/regelwerk/dguv-vorschriften/5054/betriebsaerztinnen-und-betriebsaerzte-sowie-fachkraefte-fuer-arbeitssicherheit",
+      "aliases": ["DGUV Vorschrift 2"],
+      "notes": "Die verbindliche Fassung hängt vom zuständigen Unfallversicherungsträger ab; deshalb kein einzelner Volltext als allgemeingültig archiviert."
+    },
+    {
+      "id": "dguv_vorschrift_40",
+      "title": "DGUV Vorschrift 40 – Taucherarbeiten",
+      "short_title": "DGUV Vorschrift 40",
+      "document_type": "accident_prevention_regulation",
+      "category": "occupational_safety",
+      "jurisdiction": "DE",
+      "authority": "Deutsche Gesetzliche Unfallversicherung",
+      "edition": "aktualisierte Fassung 2012",
+      "language": "de",
+      "priority": "C",
+      "access_status": "carrier_specific_versions",
+      "landing_url": "https://publikationen.dguv.de/regelwerk/dguv-vorschriften/1089/taucherarbeiten",
+      "aliases": ["DGUV Vorschrift 40"],
+      "notes": "Die verbindliche Fassung ist beim zuständigen Unfallversicherungsträger zu beziehen."
+    },
+    {
+      "id": "dguv_vorschrift_70",
+      "title": "DGUV Vorschrift 70 – Fahrzeuge",
+      "short_title": "DGUV Vorschrift 70",
+      "document_type": "accident_prevention_regulation",
+      "category": "occupational_safety",
+      "jurisdiction": "DE",
+      "authority": "Deutsche Gesetzliche Unfallversicherung",
+      "edition": "aktualisierte Fassung 2000",
+      "language": "de",
+      "priority": "C",
+      "access_status": "carrier_specific_versions",
+      "landing_url": "https://publikationen.dguv.de/regelwerk/dguv-vorschriften/1125/fahrzeuge",
+      "aliases": ["DGUV Vorschrift 70"],
+      "notes": "Die verbindliche Fassung ist beim zuständigen Unfallversicherungsträger zu beziehen."
+    }
+  ]
+}

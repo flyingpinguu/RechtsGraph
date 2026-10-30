@@ -72,9 +72,10 @@ flowchart LR
 Für den deutschen Bestand nutzt die Pipeline primär die XML-Fassungen von
 *Gesetze im Internet*. PDFs ergänzen Seitenbelege und dienen als visuelle
 Referenz. Konsolidierte EU-Rechtsakte werden über Cellar bezogen und aus Formex
-4 verarbeitet. Eindeutig referenzierte EU-Verordnungen, für die keine
-konsolidierte Fassung im Bestand liegt, ergänzt die Standardpipeline aus den
-amtlichen Originalfassungen; andere externe Dokumentarten bleiben außen vor.
+4 verarbeitet. Eindeutig referenzierte EU-Verordnungen und -Richtlinien, für
+die keine konsolidierte Fassung im Bestand liegt, ergänzt die Standardpipeline
+aus den amtlichen Originalfassungen; andere externe Dokumentarten bleiben
+außen vor.
 Beide Quellen werden in dasselbe Modell aus `Document`, `StructuralUnit` und
 `Chunk` übersetzt, bevor Referenzen aufgelöst und die Daten nach Neo4j
 exportiert werden.
@@ -114,9 +115,9 @@ deutschen und europäischen Parser ab.
 
 ## Größenordnung
 
-Der aktuelle Build verbindet mehr als 11.000 konsolidierte deutsche und
-europäische Rechtsakte. In Neo4j entstehen daraus rund 1,4 Millionen Knoten und
-4,4 Millionen Beziehungen. Der vollständige Korpus und die generierten
+Der aktuelle Build verbindet mehr als 12.000 deutsche und europäische
+Rechtsakte. In Neo4j entstehen daraus rund 1,6 Millionen Knoten und
+5,1 Millionen Beziehungen. Der vollständige Korpus und die generierten
 Importdateien werden wegen ihrer Größe nicht im Repository versioniert; hier
 liegen die Parser, Pipelines, Tests und Exportwerkzeuge.
 
@@ -158,7 +159,8 @@ RechtsGraph/
 Die wichtigsten Bausteine sind:
 
 - ein GII-Adapter für deutsches XML inklusive CALS-Tabellen,
-- ein Formex-Adapter für konsolidiertes EU-Recht und Originalverordnungen,
+- ein Formex-Adapter für konsolidiertes EU-Recht sowie referenzierte
+  Originalverordnungen und -richtlinien,
 - eine gemeinsame Content-Graph-Repräsentation,
 - dokumentübergreifende Referenzauflösung,
 - JSON-, CSV- und Cypher-Exporte für Neo4j,
@@ -216,8 +218,64 @@ einem Neustart auswertbar.
 ```bash
 cd pdf-neo4j-pipeline/debug_ui
 npm start                 # schlankes RechtsGraph-Rechercheprofil
+npm run start:web-only          # Web mit juristischer Arbeitsanleitung
+npm run start:baseline     # Web ohne juristische Arbeitsanleitung
 npm run start:full        # vollständiges Codex-Profil für Entwicklung
 ```
+
+Neue Unterhaltungen unterstützen Rückfragen und Folgefragen im selben gespeicherten
+Agenten-Thread, auch nach einem Server-Neustart. Das Transkript bleibt sichtbar;
+„Neue Unterhaltung“ beginnt einen unabhängigen Fall. Alte temporäre Runs bleiben
+lesbar, sind jedoch nicht fortsetzbar. Details stehen in der
+[Dialog-Dokumentation](pdf-neo4j-pipeline/debug_ui/README.md).
+
+Die [allgemeine Arbeitsanleitung](pdf-neo4j-pipeline/debug_ui/LEGAL_RESEARCH_GUIDE.md)
+bietet flexible Möglichkeiten für Sachverhaltsklärung, Quellenprüfung und
+optionale Rechtsprechungsrecherche.
+
+Retrieval-Treffer enthalten kompakte Quelleninformationen einschließlich
+gespeichertem Rechtsstatus, Konsolidierungsdatum und Hinweisen zur PDF-Qualität,
+soweit verfügbar. Diese Angaben bestätigen keine Gültigkeit zu einem Stichtag.
+Lokale Quellen und Websuche können frei kombiniert werden.
+
+Ein [Offline-Retrievaltest](pdf-neo4j-pipeline/reports/retrieval_evaluation.md)
+misst das Auffinden geprüfter Belegstellen ohne Modellaufrufe. Für den Vergleich
+mit Websuche allein gibt es ein getrenntes `web_only`-Profil und einen
+[paarweisen Vergleichslauf](pdf-neo4j-pipeline/evals/README.md). Dieser erstellt
+standardmäßig nur einen Offline-Plan; echte Agentenläufe benötigen `--execute`.
+Die zwölf vorbereiteten Rechtsfragen sind noch nicht fachlich bewertet.
+
+## Optionale semantische und hybride Suche
+
+Zusätzlich zur SQLite-Volltextsuche kann RechtsGraph Textabschnitte über
+OpenRouter einbetten und als abgeleitete Vektorprojektion in Neo4j indexieren.
+Die hybride Suche kombiniert BM25- und Vektorränge; Quellen, Normzitate und
+Kontext kommen weiterhin aus dem kanonischen lokalen Index. Modell und Dimension
+sind konfigurierbar. Der erste Aufbau ist auf einen Kernkorpus begrenzt,
+fortsetzbar und mit einem Budgetlimit versehen.
+
+```bash
+cd pdf-neo4j-pipeline
+# Kostenloser Plan; --execute startet den Aufbau (Standardbudget: 1 USD).
+./.venv-mcp/bin/python scripts/build_vector_index.py
+# Kleiner Agentenvergleich: drei feste Aufgaben, sechs Sitzungen; zunächst Plan.
+node evals/run_legal_competence_v1.mjs
+```
+
+Konfiguration, Grenzen und Prüfungen stehen in der
+[Dokumentation zur Vektorsuche](pdf-neo4j-pipeline/reports/vector_search.md).
+Der vollständige Agentenbenchmark bleibt explizit mit `--suite full` verfügbar.
+
+Für die schnelle Wiederholungsprüfung ohne Antwortmodell gibt es zusätzlich
+drei feste Suchfragen, jeweils mit Volltext-, Vektor- und hybrider Suche:
+
+```bash
+./.venv-mcp/bin/python scripts/check_vector_search.py --execute
+```
+
+Die Query-Embeddings werden gecacht; identische Wiederholungen benötigen keine
+neuen Embedding-Aufrufe. Treffer und Ränge werden als technischer Suchtest
+berichtet, getrennt von der juristischen Antwortqualität.
 
 ## Tech Stack
 
